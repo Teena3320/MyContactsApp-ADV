@@ -6,10 +6,10 @@ import java.util.UUID;
 
 public abstract class User {
     private final UUID id;
-    private final String email;              // immutable identifier
-    private String fullName;                 // mutable profile field
-    private String passwordSalt;             // private sensitive
-    private String passwordHash;             // private sensitive
+    private final String email;          
+    private String fullName;                
+    private String passwordSalt;             
+    private String passwordHash;             
     private final LocalDateTime createdAt;
 
     protected User(UUID id,
