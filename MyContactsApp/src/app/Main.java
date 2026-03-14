@@ -1,53 +1,31 @@
 package app;
 
-import domain.PremiumUser;
-import domain.User;
-import domain.UserType;
+import domain.*;
 import services.*;
 import util.ValidationException;
 
-import java.util.EnumMap;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Scanner;
+import java.util.*;
 /**
- * UC-03: User Profile Management (Core Only: Name & Password)
+ * Use Case 4: Create Contact
  *
- * This section extends the console app to allow a logged-in user to manage core
- * profile details without UI preferences. It demonstrates:
+ *   This module enables:
+ *   - Creating a new Person or Organization contact
+ *   - Adding multiple phone numbers and email addresses
+ *   - Capturing optional fields (address, tags, notes)
+ *   - Storing timestamps and auto‑generated unique IDs
+ *   Optional enhancements:
+ *   - Auto‑validation for phone and email formats
+ *   - Predefined tag suggestions (Family, Work, Friends)
  *
- *  - View Profile:
- *      Displays immutable identifiers (email, createdAt) and mutable fields (fullName).
- *
- *  - Update Full Name (Command Pattern):
- *      Uses UpdateFullNameCommand to validate non-blank names, persist the change
- *      via UserRepository, and support undo/redo through CommandHistory.
- *
- *  - Change Password (Security + Command Pattern):
- *      Uses ChangePasswordCommand to:
- *        * Verify the current password against the stored salted hash.
- *        * Enforce strong password policy (min length + upper/lower/digit/special).
- *        * Generate a new per-user salt and hash (via PasswordHasher) before persisting.
- *      Prior password material (salt + hash) is captured to support undo.
- *
- *  - Undo/Redo:
- *      CommandHistory maintains stacks for undo/redo, enabling reversible
- *      profile changes while keeping side effects (repository saves) consistent.
- *
- * Key OOP & Design Concepts:
- *  - Encapsulation: User keeps password salt/hash private; updates happen through controlled methods.
- *  - Abstraction: ProfileCommand interface abstracts execute/undo contract for profile actions.
- *  - Command Pattern: Each profile change is a self-contained command (execute/undo/description).
- *  - Repository Abstraction: UserRepository decouples persistence (here, in-memory) from domain logic.
- *  - Validation & Exceptions: Clear validation (name non-blank, strong password) with actionable messages.
- *
- * Notes:
- *  - Password hashing uses salted SHA-256 for demonstration. For production, use a KDF
- *    such as PBKDF2, bcrypt, scrypt, or Argon2.
- *  - Email is treated as an immutable identifier post registration.
- *
+ *   Demonstrates:
+ *   - Object construction using Builder Pattern
+ *   - Contact inheritance hierarchy (PersonContact / OrganizationContact)
+ *   - Composition (Contact has PhoneNumber, Email objects)
+ *   - UUID generation for unique identifiers
+ *   - Encapsulated validation and safe field initialization
+ * 
  * @author tseb3003
- * @version 3.0
+ * @version 4.0
  */
 public class Main {
 
@@ -59,12 +37,15 @@ public class Main {
         AuthenticationStrategy basicStrategy = new BasicAuthStrategy(userRepository, passwordHasher);
         Map<AuthMethod, AuthenticationStrategy> strategies = new EnumMap<>(AuthMethod.class);
         strategies.put(AuthMethod.BASIC, basicStrategy);
-
         AuthService authService = new AuthService(strategies, SessionManager.getInstance());
 
         CommandHistory history = new CommandHistory();
 
-        System.out.println("=== MyContacts App - UC-03 ===");
+        // UC-04: Contacts
+        ContactRepository contactRepository = new InMemoryContactRepository();
+        ContactService contactService = new ContactService(contactRepository);
+
+        System.out.println("=== MyContacts App - UC-01, UC-02 (Basic), UC-03 (Core), UC-04 (Create Contact) ===");
 
         try (Scanner scanner = new Scanner(System.in)) {
             boolean running = true;
@@ -77,9 +58,12 @@ public class Main {
                 System.out.println("5) Change Password");
                 System.out.println("6) Undo last change");
                 System.out.println("7) Redo change");
-                System.out.println("8) Who am I?");
-                System.out.println("9) Logout");
-                System.out.println("10) Exit");
+                System.out.println("8) Create Contact (Person)");
+                System.out.println("9) Create Contact (Organization)");
+                System.out.println("10) List My Contacts");
+                System.out.println("11) Who am I?");
+                System.out.println("12) Logout");
+                System.out.println("13) Exit");
                 System.out.print("Choose an option: ");
                 String choice = scanner.nextLine().trim();
 
@@ -91,9 +75,12 @@ public class Main {
                     case "5" -> handleChangePassword(scanner, authService, userRepository, passwordHasher, history);
                     case "6" -> System.out.println(history.undo());
                     case "7" -> System.out.println(history.redo());
-                    case "8" -> handleWhoAmI(authService);
-                    case "9" -> handleLogout(authService);
-                    case "10" -> {
+                    case "8" -> handleCreatePerson(scanner, authService, contactService);
+                    case "9" -> handleCreateOrganization(scanner, authService, contactService);
+                    case "10" -> handleListContacts(authService, contactService);
+                    case "11" -> handleWhoAmI(authService);
+                    case "12" -> handleLogout(authService);
+                    case "13" -> {
                         running = false;
                         System.out.println("Goodbye!");
                     }
@@ -103,6 +90,7 @@ public class Main {
         }
     }
 
+    // ===== UC-01 =====
     private static void handleRegistration(Scanner scanner, RegistrationService registrationService) {
         System.out.print("Enter full name: ");
         String fullName = scanner.nextLine().trim();
@@ -134,6 +122,7 @@ public class Main {
         }
     }
 
+    // ===== UC-02 =====
     private static void handleBasicLogin(Scanner scanner, AuthService authService) {
         System.out.print("Email: ");
         String email = scanner.nextLine().trim();
@@ -223,5 +212,129 @@ public class Main {
     private static void handleLogout(AuthService authService) {
         authService.logout();
         System.out.println("Logged out.");
+    }
+
+    // ===== UC-04 =====
+    private static void handleCreatePerson(Scanner scanner,
+                                           AuthService authService,
+                                           ContactService contactService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+
+        System.out.print("First name (optional): ");
+        String first = emptyToNull(scanner.nextLine());
+        System.out.print("Last name (optional): ");
+        String last = emptyToNull(scanner.nextLine());
+
+        List<PhoneNumber> phones = readPhones(scanner);
+        List<EmailAddress> emails = readEmails(scanner);
+
+        try {
+            PersonContact c = contactService.createPerson(current.get().getId(), first, last, phones, emails);
+            System.out.println("Person contact created with ID: " + c.getId());
+        } catch (IllegalArgumentException ex) {
+            System.out.println("Create failed: " + ex.getMessage());
+        }
+    }
+
+    private static void handleCreateOrganization(Scanner scanner,
+                                                 AuthService authService,
+                                                 ContactService contactService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+
+        System.out.print("Organization name: ");
+        String org = scanner.nextLine().trim();
+
+        List<PhoneNumber> phones = readPhones(scanner);
+        List<EmailAddress> emails = readEmails(scanner);
+
+        try {
+            OrganizationContact c = contactService.createOrganization(current.get().getId(), org, phones, emails);
+            System.out.println("Organization contact created with ID: " + c.getId());
+        } catch (IllegalArgumentException ex) {
+            System.out.println("Create failed: " + ex.getMessage());
+        }
+    }
+
+    private static void handleListContacts(AuthService authService, ContactService contactService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        List<Contact> list = contactService.listMyContacts(current.get().getId());
+        if (list.isEmpty()) {
+            System.out.println("You have no contacts.");
+            return;
+        }
+        System.out.println("\n=== My Contacts ===");
+        for (Contact c : list) {
+            System.out.println("- " + c.toString());
+        }
+    }
+
+    private static List<PhoneNumber> readPhones(Scanner scanner) {
+        List<PhoneNumber> phones = new ArrayList<>();
+        while (true) {
+            System.out.print("Add phone? (Y/N): ");
+            String ans = scanner.nextLine().trim().toUpperCase();
+            if (!ans.equals("Y")) break;
+
+            PhoneType type = askPhoneType(scanner);
+            System.out.print("Phone number: ");
+            String number = scanner.nextLine().trim();
+            phones.add(new PhoneNumber(type, number));
+        }
+        return phones;
+    }
+
+    private static PhoneType askPhoneType(Scanner scanner) {
+        while (true) {
+            System.out.print("Type (MOBILE/HOME/WORK/OTHER): ");
+            String raw = scanner.nextLine().trim().toUpperCase();
+            try {
+                return PhoneType.valueOf(raw);
+            } catch (IllegalArgumentException ex) {
+                System.out.println("Invalid type. Try again.");
+            }
+        }
+    }
+
+    private static List<EmailAddress> readEmails(Scanner scanner) {
+        List<EmailAddress> emails = new ArrayList<>();
+        while (true) {
+            System.out.print("Add email? (Y/N): ");
+            String ans = scanner.nextLine().trim().toUpperCase();
+            if (!ans.equals("Y")) break;
+
+            EmailType type = askEmailType(scanner);
+            System.out.print("Email address: ");
+            String address = scanner.nextLine().trim();
+            emails.add(new EmailAddress(type, address));
+        }
+        return emails;
+    }
+
+    private static EmailType askEmailType(Scanner scanner) {
+        while (true) {
+            System.out.print("Type (PERSONAL/WORK/OTHER): ");
+            String raw = scanner.nextLine().trim().toUpperCase();
+            try {
+                return EmailType.valueOf(raw);
+            } catch (IllegalArgumentException ex) {
+                System.out.println("Invalid type. Try again.");
+            }
+        }
+    }
+
+    private static String emptyToNull(String s) {
+        return (s == null || s.trim().isEmpty()) ? null : s.trim();
     }
 }

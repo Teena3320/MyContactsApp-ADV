@@ -16,6 +16,8 @@ public final class Validators {
     private static final Pattern PW_DIGIT = Pattern.compile(".*\\d.*");
     private static final Pattern PW_SPECIAL = Pattern.compile(".*[^A-Za-z0-9].*");
 
+    private static final Pattern PHONE_RX = Pattern.compile("^[+\\d][0-9\\-()\\s]{6,19}$");
+
     public static boolean isNonBlank(String s) {
         return s != null && !s.trim().isEmpty();
     }
@@ -31,5 +33,13 @@ public final class Validators {
         if (!PW_DIGIT.matcher(password).matches()) return false;
         if (!PW_SPECIAL.matcher(password).matches()) return false;
         return true;
+    }
+
+    public static boolean isValidPhone(String number) {
+        if (number == null) return false;
+        String n = number.trim();
+        if (!PHONE_RX.matcher(n).matches()) return false;
+        int digits = (int) n.chars().filter(Character::isDigit).count();
+        return digits >= 7 && digits <= 15;
     }
 }
