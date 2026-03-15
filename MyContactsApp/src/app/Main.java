@@ -6,27 +6,37 @@ import util.ValidationException;
 
 import java.util.*;
 /**
- * Use Case 8: Bulk Operations (Groups)
+ * Use Case 9: Search Contacts
  *
  *   This module enables:
- *   - Creating logical groups of contacts (e.g., Family, Work, Clients)
- *   - Adding or removing multiple contacts within a group
- *   - Performing bulk actions on groups (delete, tag, export, etc.)
+ *   - Querying a user's contacts by multiple criteria (name, email, phone digits, type)
+ *   - Composing filters with logical operators (AND / OR / NOT)
+ *   - Case‑insensitive, partial matching for human‑friendly queries
  *   Optional enhancements:
- *   - Nested groups using the Composite Pattern
- *   - Batch processing optimizations for large contact sets
+ *   - Tag‑based and date‑range filters, regex and fuzzy matching (e.g., Levenshtein)
+ *   - Pagination, result highlighting, and relevance ranking
  *
  *   Demonstrates:
- *   - Composite Pattern to treat individual contacts and groups uniformly
- *   - Encapsulation of group behavior in dedicated domain structures
- *   - Bulk‑operation abstraction (apply once, execute for all children)
- *   - Clear separation between grouping logic and contact storage
- *   - Extensibility for advanced multi‑contact operations
+ *   - Specification Pattern for declarative, composable search criteria
+ *   - Clean separation of concerns (criteria construction vs. repository access)
+ *   - Null‑safe handling and normalization (lowercasing, digit‑only phone matching)
+ *   - Extensibility: add new criteria without changing the search engine
+ *   - Optional Chain‑of‑Responsibility pipeline for pre/post‑processing
+ *
+ *   Components:
+ *   - Specification<T> : boolean predicate + combinators (and/or/not)
+ *   - ContactSpecifications : reusable criteria (name/email/phone/type)
+ *   - SearchService : executes specification against owner‑scoped dataset
+ *
+ *   Notes:
+ *   - Current implementation operates in‑memory; for large datasets, push specs down to storage
+ *     (e.g., translate to DB queries or indexed search) to improve performance.
  *
  * @author tseb3003
- * @version 8.0
+ * @version 9.0
  */
- class Main {
+
+public class Main {
 
     public static void main(String[] args) {
         UserRepository userRepository = new InMemoryUserRepository();
@@ -52,7 +62,9 @@ import java.util.*;
 
         GroupService groupService = new GroupService(contactRepository);
 
-        System.out.println("=== MyContacts App - UC-08 ===");
+        SearchService searchService = new SearchService(contactRepository);
+
+        System.out.println("=== MyContacts App - UC-09 ===");
 
         try (Scanner scanner = new Scanner(System.in)) {
             boolean running = true;
@@ -79,12 +91,13 @@ import java.util.*;
                 System.out.println("19) Create Group ");
                 System.out.println("20) Add Contact to Group ");
                 System.out.println("21) Remove Contact from Group ");
-                System.out.println("22) List Groups ");
+                System.out.println("22) List Groups");
                 System.out.println("23) Bulk Soft Delete Group ");
-                System.out.println("24) Bulk Export Group");
-                System.out.println("25) Who am I?");
-                System.out.println("26) Logout");
-                System.out.println("27) Exit");
+                System.out.println("24) Bulk Export Group ");
+                System.out.println("25) Search Contacts");
+                System.out.println("26) Who am I?");
+                System.out.println("27) Logout");
+                System.out.println("28) Exit");
                 System.out.print("Choose an option: ");
                 String choice = scanner.nextLine().trim();
 
@@ -113,9 +126,10 @@ import java.util.*;
                     case "22" -> handleListGroups(scanner, authService, groupService);
                     case "23" -> handleBulkSoftDeleteGroup(scanner, authService, groupService, deletionService);
                     case "24" -> handleBulkExportGroup(scanner, authService, groupService, contactRepository, renderer);
-                    case "25" -> handleWhoAmI(authService);
-                    case "26" -> handleLogout(authService);
-                    case "27" -> {
+                    case "25" -> handleSearchContacts(scanner, authService, searchService, renderer);
+                    case "26" -> handleWhoAmI(authService);
+                    case "27" -> handleLogout(authService);
+                    case "28" -> {
                         running = false;
                         System.out.println("Goodbye!");
                     }
@@ -754,6 +768,75 @@ import java.util.*;
         BulkResult result = op.apply(ownerId, ids);
         System.out.println(result.summary());
         result.messages().forEach(System.out::println);
+    }
+
+    // ===== UC-09 =====
+    private static void handleSearchContacts(Scanner scanner,
+                                             AuthService authService,
+                                             SearchService searchService,
+                                             ContactRenderer renderer) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        System.out.println("\n=== Search Contacts (leave blank to skip a filter) ===");
+
+        System.out.print("Name contains: ");
+        String name = blankToNull(scanner.nextLine());
+
+        System.out.print("Email contains: ");
+        String email = blankToNull(scanner.nextLine());
+
+        System.out.print("Phone contains digits (e.g., 202555): ");
+        String phoneDigits = blankToNull(scanner.nextLine());
+
+        System.out.print("Type (PERSON/ORGANIZATION, blank = any): ");
+        String typeRaw = blankToNull(scanner.nextLine());
+        String type = (typeRaw == null) ? null : typeRaw.toUpperCase(Locale.ROOT);
+
+        Specification<Contact> spec = Specification.alwaysTrue();
+        if (name != null)  spec = spec.and(ContactSpecifications.nameContainsIgnoreCase(name));
+        if (email != null) spec = spec.and(ContactSpecifications.emailContainsIgnoreCase(email));
+        if (phoneDigits != null) spec = spec.and(ContactSpecifications.phoneContainsDigits(phoneDigits));
+        if ("PERSON".equals(type)) {
+            spec = spec.and(ContactSpecifications.typeIsPerson());
+        } else if ("ORGANIZATION".equals(type)) {
+            spec = spec.and(ContactSpecifications.typeIsOrganization());
+        }
+
+        List<Contact> results = searchService.search(ownerId, spec);
+        if (results.isEmpty()) {
+            System.out.println("No contacts matched your criteria.");
+            return;
+        }
+
+        System.out.println("\n=== Search Results (" + results.size() + ") ===");
+        for (int i = 0; i < results.size(); i++) {
+            Contact c = results.get(i);
+            System.out.printf("%2d) %s (%s) [id=%s]%n",
+                    i + 1,
+                    ConsoleContactRenderer.bestEffortName(c),
+                    c.getClass().getSimpleName(),
+                    c.getId());
+        }
+
+        System.out.print("View a result? Enter number or press Enter to skip: ");
+        String sel = scanner.nextLine().trim();
+        if (!sel.isEmpty()) {
+            try {
+                int idx = Integer.parseInt(sel);
+                if (idx >= 1 && idx <= results.size()) {
+                    Contact chosen = results.get(idx - 1);
+                    ContactRendererOptions options = ContactRendererOptions.builder()
+                            .uppercaseName(false).maskEmails(true).build();
+                    System.out.println(renderer.render(chosen, options));
+                } else {
+                    System.out.println("Invalid selection.");
+                }
+            } catch (NumberFormatException nfe) {
+                System.out.println("Invalid selection.");
+            }
+        }
     }
 
     // ===== Helpers =====
