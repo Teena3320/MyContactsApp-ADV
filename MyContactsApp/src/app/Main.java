@@ -6,36 +6,40 @@ import util.ValidationException;
 
 import java.util.*;
 /**
- * Use Case 9: Search Contacts
+ * Use Case 10: Advanced Filter & Sort
  *
  *   This module enables:
- *   - Querying a user's contacts by multiple criteria (name, email, phone digits, type)
- *   - Composing filters with logical operators (AND / OR / NOT)
- *   - Case‑insensitive, partial matching for human‑friendly queries
+ *   - Applying multiple filters to a user's contacts (AND semantics)
+ *   - Choosing a sort strategy (by name, created/updated timestamps, type → name)
+ *   - Extending filter and sort behavior without modifying core logic
  *   Optional enhancements:
- *   - Tag‑based and date‑range filters, regex and fuzzy matching (e.g., Levenshtein)
- *   - Pagination, result highlighting, and relevance ranking
+ *   - OR / NOT filter combinators and filter groups
+ *   - Multi-level sorting (primary, secondary, tertiary)
+ *   - Pagination, stable sorting, and null-safe comparators
  *
  *   Demonstrates:
- *   - Specification Pattern for declarative, composable search criteria
- *   - Clean separation of concerns (criteria construction vs. repository access)
- *   - Null‑safe handling and normalization (lowercasing, digit‑only phone matching)
- *   - Extensibility: add new criteria without changing the search engine
- *   - Optional Chain‑of‑Responsibility pipeline for pre/post‑processing
+ *   - Strategy Pattern for both filtering (FilterStrategy) and sorting (SortStrategy)
+ *   - Open/Closed Principle: new filters/sorts can be added via new strategies
+ *   - Separation of concerns: FilterSortService orchestrates repository → filter → sort
+ *   - Reuse of existing rendering to preview filtered/sorted results
+ *   - Time-based predicates (Created/Updated in last N days)
  *
  *   Components:
- *   - Specification<T> : boolean predicate + combinators (and/or/not)
- *   - ContactSpecifications : reusable criteria (name/email/phone/type)
- *   - SearchService : executes specification against owner‑scoped dataset
+ *   - FilterSortService : orchestrates filtering and sorting for owner-scoped datasets
+ *   - FilterStrategy<T> : boolean test for inclusion
+ *   - SortStrategy<T>   : provides Comparator<T> for ordering
+ *   - Filters           : built-in strategies (HasEmail, HasPhone, TypePerson, TypeOrganization,
+ *                         CreatedLastNDays, UpdatedLastNDays, EmailDomainContains, NameContains)
+ *   - SortStrategies    : enum strategies (NAME_ASC/DESC, CREATED_AT_ASC/DESC, UPDATED_AT_ASC/DESC, TYPE_THEN_NAME)
  *
  *   Notes:
- *   - Current implementation operates in‑memory; for large datasets, push specs down to storage
- *     (e.g., translate to DB queries or indexed search) to improve performance.
+ *   - Filters are combined with AND semantics by default; extend with composite filters for OR/NOT.
+ *   - Current implementation is in-memory; for large datasets, push filters/sorts to the data layer (DB/index).
+ *   - Comparators are case-insensitive for name-based ordering and handle polymorphic types uniformly.
  *
  * @author tseb3003
- * @version 9.0
+ * @version 10.0
  */
-
 public class Main {
 
     public static void main(String[] args) {
@@ -64,7 +68,9 @@ public class Main {
 
         SearchService searchService = new SearchService(contactRepository);
 
-        System.out.println("=== MyContacts App - UC-09 ===");
+        FilterSortService filterSortService = new FilterSortService(contactRepository);
+
+        System.out.println("=== MyContacts App - UC-10 ===");
 
         try (Scanner scanner = new Scanner(System.in)) {
             boolean running = true;
@@ -80,7 +86,7 @@ public class Main {
                 System.out.println("8)  Create Contact (Person)");
                 System.out.println("9)  Create Contact (Organization)");
                 System.out.println("10) List My Contacts");
-                System.out.println("11) View Contact Details ");
+                System.out.println("11) View Contact Details");
                 System.out.println("12) Edit Contact ");
                 System.out.println("13) Undo last contact edit ");
                 System.out.println("14) Redo contact edit ");
@@ -91,13 +97,14 @@ public class Main {
                 System.out.println("19) Create Group ");
                 System.out.println("20) Add Contact to Group ");
                 System.out.println("21) Remove Contact from Group ");
-                System.out.println("22) List Groups");
-                System.out.println("23) Bulk Soft Delete Group ");
+                System.out.println("22) List Groups ");
+                System.out.println("23) Bulk Soft Delete Group");
                 System.out.println("24) Bulk Export Group ");
-                System.out.println("25) Search Contacts");
-                System.out.println("26) Who am I?");
-                System.out.println("27) Logout");
-                System.out.println("28) Exit");
+                System.out.println("25) Search Contacts ");
+                System.out.println("26) Advanced Filter & Sort ");
+                System.out.println("27) Who am I?");
+                System.out.println("28) Logout");
+                System.out.println("29) Exit");
                 System.out.print("Choose an option: ");
                 String choice = scanner.nextLine().trim();
 
@@ -127,9 +134,10 @@ public class Main {
                     case "23" -> handleBulkSoftDeleteGroup(scanner, authService, groupService, deletionService);
                     case "24" -> handleBulkExportGroup(scanner, authService, groupService, contactRepository, renderer);
                     case "25" -> handleSearchContacts(scanner, authService, searchService, renderer);
-                    case "26" -> handleWhoAmI(authService);
-                    case "27" -> handleLogout(authService);
-                    case "28" -> {
+                    case "26" -> handleAdvancedFilterSort(scanner, authService, filterSortService, renderer);
+                    case "27" -> handleWhoAmI(authService);
+                    case "28" -> handleLogout(authService);
+                    case "29" -> {
                         running = false;
                         System.out.println("Goodbye!");
                     }
@@ -839,7 +847,122 @@ public class Main {
         }
     }
 
+    // ===== UC-10 =====
+    private static void handleAdvancedFilterSort(Scanner scanner,
+                                                 AuthService authService,
+                                                 FilterSortService filterSortService,
+                                                 ContactRenderer renderer) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        System.out.println("\n=== Advanced Filter & Sort (UC-10) ===");
+        List<FilterStrategy<Contact>> filters = new ArrayList<>();
+
+        boolean selecting = true;
+        while (selecting) {
+            System.out.println("\nAdd filters (choose multiple, 9 to run):");
+            System.out.println("1) Has Email");
+            System.out.println("2) Has Phone");
+            System.out.println("3) Type: Person");
+            System.out.println("4) Type: Organization");
+            System.out.println("5) Created in last N days");
+            System.out.println("6) Updated in last N days");
+            System.out.println("7) Email domain contains (e.g., gmail.com)");
+            System.out.println("8) Name contains (case-insensitive)");
+            System.out.println("9) Done (run)");
+            System.out.print("Choose: ");
+            String opt = scanner.nextLine().trim();
+
+            switch (opt) {
+                case "1" -> { filters.add(new FilterSortService.Filters.HasEmail()); System.out.println("Added filter: Has Email"); }
+                case "2" -> { filters.add(new FilterSortService.Filters.HasPhone()); System.out.println("Added filter: Has Phone"); }
+                case "3" -> { filters.add(new FilterSortService.Filters.TypePerson()); System.out.println("Added filter: Type Person"); }
+                case "4" -> { filters.add(new FilterSortService.Filters.TypeOrganization()); System.out.println("Added filter: Type Organization"); }
+                case "5" -> {
+                    Integer nd = askPositiveInt(scanner, "Enter N (days): ");
+                    if (nd != null) { filters.add(new FilterSortService.Filters.CreatedLastNDays(nd)); System.out.println("Added filter: Created last " + nd + " days"); }
+                }
+                case "6" -> {
+                    Integer nd = askPositiveInt(scanner, "Enter N (days): ");
+                    if (nd != null) { filters.add(new FilterSortService.Filters.UpdatedLastNDays(nd)); System.out.println("Added filter: Updated last " + nd + " days"); }
+                }
+                case "7" -> {
+                    System.out.print("Domain contains: ");
+                    String d = scanner.nextLine().trim();
+                    if (!d.isEmpty()) { filters.add(new FilterSortService.Filters.EmailDomainContains(d)); System.out.println("Added filter: Domain contains '" + d + "'"); }
+                }
+                case "8" -> {
+                    System.out.print("Name contains: ");
+                    String n = scanner.nextLine().trim();
+                    if (!n.isEmpty()) { filters.add(new FilterSortService.Filters.NameContains(n)); System.out.println("Added filter: Name contains '" + n + "'"); }
+                }
+                case "9" -> selecting = false;
+                default -> { /* ignore invalid; loop */ }
+            }
+        }
+
+        System.out.println("\nChoose sort order:");
+        SortStrategies[] sorts = SortStrategies.values();
+        for (int i = 0; i < sorts.length; i++) {
+            System.out.printf("%2d) %s%n", i + 1, sorts[i].label());
+        }
+        System.out.print("Sort choice: ");
+        int sIdx = parseIndex(scanner.nextLine().trim(), 1, sorts.length);
+        if (sIdx == -1) {
+            System.out.println("Invalid sort choice.");
+            return;
+        }
+        SortStrategy<Contact> sortStrategy = sorts[sIdx - 1];
+
+        List<Contact> results = filterSortService.filterAndSort(ownerId, filters, sortStrategy);
+
+        if (results.isEmpty()) {
+            System.out.println("No contacts matched the selected filters.");
+            return;
+        }
+
+        System.out.println("\n=== Filtered & Sorted Results (" + results.size() + ") ===");
+        for (int i = 0; i < results.size(); i++) {
+            Contact c = results.get(i);
+            System.out.printf("%2d) %s (%s) [id=%s]%n",
+                    i + 1,
+                    ConsoleContactRenderer.bestEffortName(c),
+                    c.getClass().getSimpleName(),
+                    c.getId());
+        }
+
+        System.out.print("View a result? Enter number or press Enter to skip: ");
+        String sel = scanner.nextLine().trim();
+        if (!sel.isEmpty()) {
+            try {
+                int idx = Integer.parseInt(sel);
+                if (idx >= 1 && idx <= results.size()) {
+                    Contact chosen = results.get(idx - 1);
+                    ContactRendererOptions options = ContactRendererOptions.builder()
+                            .uppercaseName(false).maskEmails(true).build();
+                    System.out.println(renderer.render(chosen, options));
+                } else {
+                    System.out.println("Invalid selection.");
+                }
+            } catch (NumberFormatException nfe) {
+                System.out.println("Invalid selection.");
+            }
+        }
+    }
+
     // ===== Helpers =====
+
+    private static Integer askPositiveInt(Scanner scanner, String prompt) {
+        System.out.print(prompt);
+        String raw = scanner.nextLine().trim();
+        try {
+            int n = Integer.parseInt(raw);
+            return (n > 0) ? n : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 
     private static String chooseGroupNameFromInput(Scanner scanner, List<String> groups) {
         System.out.print("Select group (number or name): ");
@@ -991,5 +1114,14 @@ public class Main {
     private static String prompt(Scanner scanner, String message) {
         System.out.print(message);
         return scanner.nextLine();
+    }
+
+    private static int parseIndex(String s, int min, int max) {
+        try {
+            int v = Integer.parseInt(s);
+            return (v >= min && v <= max) ? v : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 }
