@@ -4,20 +4,15 @@ import domain.Contact;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
-public class InMemoryContactRepository implements ContactRepository {
+public class InMemoryContactRepository implements ContactRepository, SupportsHardDelete {
 
     private final Map<UUID, Contact> byId = new ConcurrentHashMap<>();
-    private final Map<UUID, List<UUID>> byOwner = new ConcurrentHashMap<>();
 
     @Override
     public void save(Contact contact) {
         byId.put(contact.getId(), contact);
-        byOwner.computeIfAbsent(contact.getOwnerUserId(), k -> new ArrayList<>());
-        List<UUID> ids = byOwner.get(contact.getOwnerUserId());
-        if (!ids.contains(contact.getId())) {
-            ids.add(contact.getId());
-        }
     }
 
     @Override
@@ -27,12 +22,14 @@ public class InMemoryContactRepository implements ContactRepository {
 
     @Override
     public List<Contact> findAllByOwner(UUID ownerUserId) {
-        List<UUID> ids = byOwner.getOrDefault(ownerUserId, List.of());
-        List<Contact> list = new ArrayList<>(ids.size());
-        for (UUID id : ids) {
-            Contact c = byId.get(id);
-            if (c != null) list.add(c);
-        }
-        return list;
+        return byId.values().stream()
+                .filter(c -> c.getOwnerUserId().equals(ownerUserId))
+                .sorted(Comparator.comparing(Contact::getCreatedAt))
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    @Override
+    public boolean deleteById(UUID id) {
+        return byId.remove(id) != null;
     }
 }
