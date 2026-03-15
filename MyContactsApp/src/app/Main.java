@@ -6,693 +6,907 @@ import util.ValidationException;
 
 import java.util.*;
 /**
- * Use Case 7: Delete Contact
+ * Use Case 8: Bulk Operations (Groups)
  *
  *   This module enables:
- *   - Selecting an existing contact owned by the logged‑in user
- *   - Removing the contact from persistent storage safely
- *   - Supporting both soft‑delete and hard‑delete strategies (optional)
+ *   - Creating logical groups of contacts (e.g., Family, Work, Clients)
+ *   - Adding or removing multiple contacts within a group
+ *   - Performing bulk actions on groups (delete, tag, export, etc.)
  *   Optional enhancements:
- *   - Recovery of recently deleted contacts (Recycle Bin behavior)
- *   - Admin level oversight for restoring or permanently purging entries
+ *   - Nested groups using the Composite Pattern
+ *   - Batch processing optimizations for large contact sets
  *
  *   Demonstrates:
- *   - Controlled lifecycle management of immutable Contact objects
- *   - Clear separation of delete logic through ContactService
- *   - Safety mechanisms to avoid accidental deletion (confirmation prompts)
- *   - Extensibility for future auditing/logging of removal operations
- *   - Consistent handling of PersonContact / OrganizationContact deletion flows
+ *   - Composite Pattern to treat individual contacts and groups uniformly
+ *   - Encapsulation of group behavior in dedicated domain structures
+ *   - Bulk‑operation abstraction (apply once, execute for all children)
+ *   - Clear separation between grouping logic and contact storage
+ *   - Extensibility for advanced multi‑contact operations
  *
  * @author tseb3003
- * @version 7.0
+ * @version 8.0
  */
-
-public class Main {
-
-	public static void main(String[] args) {
-		UserRepository userRepository = new InMemoryUserRepository();
-		PasswordHasher passwordHasher = new PasswordHasher();
-		RegistrationService registrationService = new RegistrationService(userRepository, passwordHasher);
-
-		AuthenticationStrategy basicStrategy = new BasicAuthStrategy(userRepository, passwordHasher);
-		Map<AuthMethod, AuthenticationStrategy> strategies = new EnumMap<>(AuthMethod.class);
-		strategies.put(AuthMethod.BASIC, basicStrategy);
-		AuthService authService = new AuthService(strategies, SessionManager.getInstance());
-
-		CommandHistory history = new CommandHistory();
-
-		InMemoryContactRepository contactRepository = new InMemoryContactRepository();
-		ContactService contactService = new ContactService(contactRepository);
-
-		ContactRenderer renderer = new ConsoleContactRenderer();
-
-		ContactEditService editService = new ContactEditService(contactRepository);
-		ContactCommandHistory contactHistory = new ContactCommandHistory();
-
-		ContactDeletionService deletionService = new ContactDeletionService(contactRepository);
-
-		System.out.println("=== MyContacts App - UC-07 ===");
-
-		try (Scanner scanner = new Scanner(System.in)) {
-			boolean running = true;
-			while (running) {
-				System.out.println();
-				System.out.println("1)  Register new user");
-				System.out.println("2)  Login");
-				System.out.println("3)  View Profile");
-				System.out.println("4)  Update Full Name");
-				System.out.println("5)  Change Password");
-				System.out.println("6)  Undo last profile change");
-				System.out.println("7)  Redo profile change");
-				System.out.println("8)  Create Contact (Person)");
-				System.out.println("9)  Create Contact (Organization)");
-				System.out.println("10) List My Contacts");
-				System.out.println("11) View Contact Details ");
-				System.out.println("12) Edit Contact ");
-				System.out.println("13) Undo last contact edit ");
-				System.out.println("14) Redo contact edit ");
-				System.out.println("15) Delete Contact ");
-				System.out.println("16) View Trash ");
-				System.out.println("17) Restore from Trash ");
-				System.out.println("18) Purge from Trash ");
-				System.out.println("19) Who am I?");
-				System.out.println("20) Logout");
-				System.out.println("21) Exit");
-				System.out.print("Choose an option: ");
-				String choice = scanner.nextLine().trim();
-
-				switch (choice) {
-				case "1" -> handleRegistration(scanner, registrationService);
-				case "2" -> handleBasicLogin(scanner, authService);
-				case "3" -> handleViewProfile(authService);
-				case "4" -> handleUpdateFullName(scanner, authService, userRepository, history);
-				case "5" -> handleChangePassword(scanner, authService, userRepository, passwordHasher, history);
-				case "6" -> System.out.println(history.undo());
-				case "7" -> System.out.println(history.redo());
-				case "8" -> handleCreatePerson(scanner, authService, contactService);
-				case "9" -> handleCreateOrganization(scanner, authService, contactService);
-				case "10" -> handleListContacts(authService, contactService);
-				case "11" -> handleViewContactDetails(scanner, authService, contactService, renderer);
-				case "12" -> handleEditContact(scanner, authService, contactService, editService, contactHistory);
-				case "13" -> System.out.println(contactHistory.undo());
-				case "14" -> System.out.println(contactHistory.redo());
-				case "15" -> handleDeleteContact(scanner, authService, contactService, deletionService);
-				case "16" -> handleViewTrash(scanner, authService, deletionService);
-				case "17" -> handleRestoreFromTrash(scanner, authService, deletionService);
-				case "18" -> handlePurgeFromTrash(scanner, authService, deletionService);
-				case "19" -> handleWhoAmI(authService);
-				case "20" -> handleLogout(authService);
-				case "21" -> {
-					running = false;
-					System.out.println("Goodbye!");
-				}
-				default -> System.out.println("Invalid choice. Try again.");
-				}
-			}
-		}
-	}
-
-	private static void handleRegistration(Scanner scanner, RegistrationService registrationService) {
-		System.out.print("Enter full name: ");
-		String fullName = scanner.nextLine().trim();
-
-		System.out.print("Enter email: ");
-		String email = scanner.nextLine().trim();
-
-		System.out.print("Enter password: ");
-		String password = scanner.nextLine();
-
-		System.out.print("User type (FREE/PREMIUM): ");
-		String typeRaw = scanner.nextLine().trim().toUpperCase();
-
-		try {
-			UserType type = UserType.valueOf(typeRaw);
-			User user = registrationService.register(fullName, email, password, type);
-			System.out.println("\nRegistration successful!");
-			System.out.println("User ID: " + user.getId());
-			System.out.println("Name   : " + user.getFullName());
-			System.out.println("Email  : " + user.getEmail());
-			System.out.println("Type   : " + type);
-			System.out.println("Created: " + user.getCreatedAt());
-		} catch (IllegalArgumentException e) {
-			System.out.println("Invalid user type. Please enter FREE or PREMIUM.");
-		} catch (ValidationException e) {
-			System.out.println("Registration failed: " + e.getMessage());
-		} catch (Exception e) {
-			System.out.println("Unexpected error: " + e.getMessage());
-		}
-	}
-
-	private static void handleBasicLogin(Scanner scanner, AuthService authService) {
-		System.out.print("Email: ");
-		String email = scanner.nextLine().trim();
-		System.out.print("Password: ");
-		String password = scanner.nextLine();
-
-		Optional<User> user = authService.login(AuthInput.basic(email, password));
-		if (user.isPresent()) {
-			System.out.println("Login successful. Welcome, " + user.get().getFullName() + "!");
-		} else {
-			System.out.println("Login failed. Invalid credentials.");
-		}
-	}
-
-	private static void handleViewProfile(AuthService authService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		User u = current.get();
-		String type = (u instanceof PremiumUser) ? "PREMIUM" : "FREE";
-		System.out.println("\n=== Profile ===");
-		System.out.println("Name       : " + u.getFullName());
-		System.out.println("Email      : " + u.getEmail());
-		System.out.println("Type       : " + type);
-		System.out.println("Created    : " + u.getCreatedAt());
-	}
-
-	private static void handleUpdateFullName(Scanner scanner,
-			AuthService authService,
-			UserRepository repository,
-			CommandHistory history) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		System.out.print("Enter new full name: ");
-		String newName = scanner.nextLine().trim();
-
-		try {
-			ProfileCommand cmd = new UpdateFullNameCommand(repository, current.get(), newName);
-			cmd.execute();
-			history.record(cmd);
-			System.out.println("Full name updated.");
-		} catch (IllegalArgumentException ex) {
-			System.out.println("Update failed: " + ex.getMessage());
-		}
-	}
-
-	private static void handleChangePassword(Scanner scanner,
-			AuthService authService,
-			UserRepository repository,
-			PasswordHasher hasher,
-			CommandHistory history) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		System.out.print("Enter current password: ");
-		String currentPw = scanner.nextLine();
-		System.out.print("Enter new password: ");
-		String newPw = scanner.nextLine();
-
-		try {
-			ProfileCommand cmd = new ChangePasswordCommand(repository, hasher, current.get(), currentPw, newPw);
-			cmd.execute();
-			history.record(cmd);
-			System.out.println("Password changed.");
-		} catch (IllegalArgumentException ex) {
-			System.out.println("Change failed: " + ex.getMessage());
-		}
-	}
-
-	private static void handleWhoAmI(AuthService authService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isPresent()) {
-			User u = current.get();
-			System.out.println("Currently logged in as: " + u.getFullName() + " <" + u.getEmail() + ">");
-		} else {
-			System.out.println("No user is logged in.");
-		}
-	}
-
-	private static void handleLogout(AuthService authService) {
-		authService.logout();
-		System.out.println("Logged out.");
-	}
-
-	private static void handleCreatePerson(Scanner scanner,
-			AuthService authService,
-			ContactService contactService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-
-		System.out.print("First name (optional): ");
-		String first = emptyToNull(scanner.nextLine());
-		System.out.print("Last name (optional): ");
-		String last = emptyToNull(scanner.nextLine());
-
-		List<PhoneNumber> phones = readPhones(scanner);
-		List<EmailAddress> emails = readEmails(scanner);
-
-		try {
-			PersonContact c = contactService.createPerson(current.get().getId(), first, last, phones, emails);
-			System.out.println("Person contact created with ID: " + c.getId());
-		} catch (IllegalArgumentException ex) {
-			System.out.println("Create failed: " + ex.getMessage());
-		}
-	}
-
-	private static void handleCreateOrganization(Scanner scanner,
-			AuthService authService,
-			ContactService contactService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-
-		System.out.print("Organization name: ");
-		String org = scanner.nextLine().trim();
-
-		List<PhoneNumber> phones = readPhones(scanner);
-		List<EmailAddress> emails = readEmails(scanner);
-
-		try {
-			OrganizationContact c = contactService.createOrganization(current.get().getId(), org, phones, emails);
-			System.out.println("Organization contact created with ID: " + c.getId());
-		} catch (IllegalArgumentException ex) {
-			System.out.println("Create failed: " + ex.getMessage());
-		}
-	}
-
-	private static void handleListContacts(AuthService authService, ContactService contactService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		List<Contact> list = contactService.listMyContacts(current.get().getId());
-		if (list.isEmpty()) {
-			System.out.println("You have no contacts.");
-			return;
-		}
-		System.out.println("\n=== My Contacts ===");
-		for (Contact c : list) {
-			System.out.println("- " + c.toString());
-		}
-	}
-
-	private static void handleViewContactDetails(Scanner scanner,
-			AuthService authService,
-			ContactService contactService,
-			ContactRenderer renderer) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		UUID userId = current.get().getId();
-
-		List<Contact> contacts = contactService.listMyContacts(userId);
-		if (contacts.isEmpty()) {
-			System.out.println("You have no contacts to view.");
-			return;
-		}
-
-		System.out.println("\n=== Select a Contact ===");
-		for (int i = 0; i < contacts.size(); i++) {
-			Contact c = contacts.get(i);
-			System.out.printf("%2d) %s [id=%s]%n", i + 1, summarize(c), c.getId());
-		}
-		System.out.print("Enter number or paste Contact ID: ");
-		String sel = scanner.nextLine().trim();
-
-		Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
-		if (chosen.isEmpty()) {
-			System.out.println("Invalid selection.");
-			return;
-		}
-
-		boolean uppercase = askYesNo(scanner, "Uppercase name? (Y/N): ");
-		boolean maskEmails = askYesNo(scanner, "Mask emails? (Y/N): ");
-
-		ContactRendererOptions options = ContactRendererOptions.builder()
-				.uppercaseName(uppercase)
-				.maskEmails(maskEmails)
-				.build();
-
-		String rendered = renderer.render(chosen.get(), options);
-		System.out.println(rendered);
-	}
-
-	private static void handleEditContact(Scanner scanner,
-			AuthService authService,
-			ContactService contactService,
-			ContactEditService editService,
-			ContactCommandHistory contactHistory) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		UUID userId = current.get().getId();
-
-		List<Contact> contacts = contactService.listMyContacts(userId);
-		if (contacts.isEmpty()) {
-			System.out.println("You have no contacts to edit.");
-			return;
-		}
-
-		System.out.println("\n=== Select a Contact to Edit ===");
-		for (int i = 0; i < contacts.size(); i++) {
-			Contact c = contacts.get(i);
-			System.out.printf("%2d) %s [id=%s]%n", i + 1, summarize(c), c.getId());
-		}
-		System.out.print("Enter number or paste Contact ID: ");
-		String sel = scanner.nextLine().trim();
-
-		Optional<Contact> chosenOpt = chooseContactFromInput(contacts, sel);
-		if (chosenOpt.isEmpty()) {
-			System.out.println("Invalid selection.");
-			return;
-		}
-		Contact chosen = chosenOpt.get();
-
-		if (chosen instanceof PersonContact) {
-			System.out.println("\nEdit Person Contact:");
-			System.out.println("1) Update first/last name");
-			System.out.println("2) Replace phone numbers");
-			System.out.println("3) Replace email addresses");
-			System.out.print("Choose: ");
-			String csel = scanner.nextLine().trim();
-			switch (csel) {
-			case "1" -> {
-				System.out.print("New first name (blank to keep): ");
-				String first = scanner.nextLine();
-				System.out.print("New last name  (blank to keep): ");
-				String last = scanner.nextLine();
-				EditPersonNameCommand cmd = new EditPersonNameCommand(
-						editService, chosen.getId(),
-						blankToNull(first), blankToNull(last)
-						);
-				System.out.println(contactHistory.recordAndExecute(cmd));
-			}
-			case "2" -> {
-				List<PhoneNumber> phones = readPhones(scanner);
-				ReplacePhonesCommand cmd = new ReplacePhonesCommand(editService, chosen.getId(), phones);
-				System.out.println(contactHistory.recordAndExecute(cmd));
-			}
-			case "3" -> {
-				List<EmailAddress> emails = readEmails(scanner);
-				ReplaceEmailsCommand cmd = new ReplaceEmailsCommand(editService, chosen.getId(), emails);
-				System.out.println(contactHistory.recordAndExecute(cmd));
-			}
-			default -> System.out.println("Invalid choice.");
-			}
-		} else if (chosen instanceof OrganizationContact) {
-			System.out.println("\nEdit Organization Contact:");
-			System.out.println("1) Update organization name");
-			System.out.println("2) Replace phone numbers");
-			System.out.println("3) Replace email addresses");
-			System.out.print("Choose: ");
-			String csel = scanner.nextLine().trim();
-			switch (csel) {
-			case "1" -> {
-				System.out.print("New organization name: ");
-				String org = scanner.nextLine().trim();
-				EditOrganizationNameCommand cmd = new EditOrganizationNameCommand(editService, chosen.getId(), org);
-				System.out.println(contactHistory.recordAndExecute(cmd));
-			}
-			case "2" -> {
-				List<PhoneNumber> phones = readPhones(scanner);
-				ReplacePhonesCommand cmd = new ReplacePhonesCommand(editService, chosen.getId(), phones);
-				System.out.println(contactHistory.recordAndExecute(cmd));
-			}
-			case "3" -> {
-				List<EmailAddress> emails = readEmails(scanner);
-				ReplaceEmailsCommand cmd = new ReplaceEmailsCommand(editService, chosen.getId(), emails);
-				System.out.println(contactHistory.recordAndExecute(cmd));
-			}
-			default -> System.out.println("Invalid choice.");
-			}
-		} else {
-			System.out.println("Unknown contact type.");
-		}
-	}
-
-	private static void handleDeleteContact(Scanner scanner,
-			AuthService authService,
-			ContactService contactService,
-			ContactDeletionService deletionService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		UUID ownerId = current.get().getId();
-
-		List<Contact> contacts = contactService.listMyContacts(ownerId);
-		if (contacts.isEmpty()) {
-			System.out.println("You have no contacts to delete.");
-			return;
-		}
-
-		System.out.println("\n=== Select a Contact to Delete ===");
-		for (int i = 0; i < contacts.size(); i++) {
-			Contact c = contacts.get(i);
-			System.out.printf("%2d) %s [id=%s]%n", i + 1, summarize(c), c.getId());
-		}
-		System.out.print("Enter number or paste Contact ID: ");
-		String sel = scanner.nextLine().trim();
-
-		Optional<Contact> chosenOpt = chooseContactFromInput(contacts, sel);
-		if (chosenOpt.isEmpty()) {
-			System.out.println("Invalid selection.");
-			return;
-		}
-		Contact chosen = chosenOpt.get();
-
-		boolean soft = askYesNo(scanner, "Soft delete (Y) or Hard delete (N)? ");
-		String confirm = prompt(scanner, "Type DELETE to confirm: ");
-		if (!"DELETE".equalsIgnoreCase(confirm.trim())) {
-			System.out.println("Deletion cancelled.");
-			return;
-		}
-
-		if (soft) {
-			boolean ok = deletionService.softDelete(ownerId, chosen.getId());
-			System.out.println(ok ? "Contact moved to Trash." : "Soft delete failed.");
-		} else {
-			boolean ok = deletionService.hardDelete(chosen.getId());
-			System.out.println(ok ? "Contact permanently deleted." : "Hard delete failed.");
-		}
-	}
-
-	private static void handleViewTrash(Scanner scanner,
-			AuthService authService,
-			ContactDeletionService deletionService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		UUID ownerId = current.get().getId();
-
-		List<DeletedContact> trash = deletionService.listTrash(ownerId);
-		if (trash.isEmpty()) {
-			System.out.println("Trash is empty.");
-			return;
-		}
-		System.out.println("\n=== Trash ===");
-		for (int i = 0; i < trash.size(); i++) {
-			DeletedContact dc = trash.get(i);
-			System.out.printf("%2d) %s [id=%s] deletedAt=%s%n",
-					i + 1,
-					ConsoleContactRenderer.bestEffortName(dc.contact()),
-					dc.contact().getId(),
-					dc.deletedAt()
-					);
-		}
-	}
-
-	private static void handleRestoreFromTrash(Scanner scanner,
-			AuthService authService,
-			ContactDeletionService deletionService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		UUID ownerId = current.get().getId();
-
-		List<DeletedContact> trash = deletionService.listTrash(ownerId);
-		if (trash.isEmpty()) {
-			System.out.println("Trash is empty.");
-			return;
-		}
-		for (int i = 0; i < trash.size(); i++) {
-			DeletedContact dc = trash.get(i);
-			System.out.printf("%2d) %s [id=%s]%n",
-					i + 1, ConsoleContactRenderer.bestEffortName(dc.contact()), dc.contact().getId());
-		}
-		System.out.print("Enter number or paste Contact ID to restore: ");
-		String sel = scanner.nextLine().trim();
-
-		Optional<DeletedContact> chosen = chooseDeletedFromInput(trash, sel);
-		if (chosen.isEmpty()) {
-			System.out.println("Invalid selection.");
-			return;
-		}
-		boolean ok = deletionService.restore(ownerId, chosen.get().contact().getId());
-		System.out.println(ok ? "Contact restored." : "Restore failed.");
-	}
-
-	private static void handlePurgeFromTrash(Scanner scanner,
-			AuthService authService,
-			ContactDeletionService deletionService) {
-		Optional<User> current = authService.currentUser();
-		if (current.isEmpty()) {
-			System.out.println("Please login first.");
-			return;
-		}
-		UUID ownerId = current.get().getId();
-
-		List<DeletedContact> trash = deletionService.listTrash(ownerId);
-		if (trash.isEmpty()) {
-			System.out.println("Trash is empty.");
-			return;
-		}
-		for (int i = 0; i < trash.size(); i++) {
-			DeletedContact dc = trash.get(i);
-			System.out.printf("%2d) %s [id=%s]%n",
-					i + 1, ConsoleContactRenderer.bestEffortName(dc.contact()), dc.contact().getId());
-		}
-		System.out.print("Enter number or paste Contact ID to purge permanently: ");
-		String sel = scanner.nextLine().trim();
-
-		Optional<DeletedContact> chosen = chooseDeletedFromInput(trash, sel);
-		if (chosen.isEmpty()) {
-			System.out.println("Invalid selection.");
-			return;
-		}
-		String confirm = prompt(scanner, "Type PURGE to confirm: ");
-		if (!"PURGE".equalsIgnoreCase(confirm.trim())) {
-			System.out.println("Purge cancelled.");
-			return;
-		}
-		boolean ok = deletionService.purge(ownerId, chosen.get().contact().getId());
-		System.out.println(ok ? "Contact purged from Trash." : "Purge failed.");
-	}
-
-	private static Optional<Contact> chooseContactFromInput(List<Contact> contacts, String sel) {
-		Optional<Contact> chosen = Optional.empty();
-		try {
-			UUID id = UUID.fromString(sel);
-			chosen = contacts.stream().filter(c -> c.getId().equals(id)).findFirst();
-		} catch (IllegalArgumentException ignored) {
-			try {
-				int idx = Integer.parseInt(sel);
-				if (idx >= 1 && idx <= contacts.size()) {
-					chosen = Optional.of(contacts.get(idx - 1));
-				}
-			} catch (NumberFormatException ignored2) { }
-		}
-		return chosen;
-	}
-
-	private static Optional<DeletedContact> chooseDeletedFromInput(List<DeletedContact> list, String sel) {
-		Optional<DeletedContact> chosen = Optional.empty();
-		try {
-			UUID id = UUID.fromString(sel);
-			chosen = list.stream().filter(dc -> dc.contact().getId().equals(id)).findFirst();
-		} catch (IllegalArgumentException ignored) {
-			try {
-				int idx = Integer.parseInt(sel);
-				if (idx >= 1 && idx <= list.size()) {
-					chosen = Optional.of(list.get(idx - 1));
-				}
-			} catch (NumberFormatException ignored2) { }
-		}
-		return chosen;
-	}
-
-	private static boolean askYesNo(Scanner scanner, String prompt) {
-		while (true) {
-			System.out.print(prompt);
-			String a = scanner.nextLine().trim().toUpperCase(Locale.ROOT);
-			if (a.equals("Y")) return true;
-			if (a.equals("N")) return false;
-			System.out.println("Please enter Y or N.");
-		}
-	}
-
-	private static String summarize(Contact c) {
-		String name = ConsoleContactRenderer.bestEffortName(c);
-		String kind = c.getClass().getSimpleName();
-		return name + " (" + kind + ")";
-	}
-
-	private static List<PhoneNumber> readPhones(Scanner scanner) {
-		List<PhoneNumber> phones = new ArrayList<>();
-		while (true) {
-			System.out.print("Add phone? (Y/N): ");
-			String ans = scanner.nextLine().trim().toUpperCase();
-			if (!ans.equals("Y")) break;
-
-			PhoneType type = askPhoneType(scanner);
-			System.out.print("Phone number: ");
-			String number = scanner.nextLine().trim();
-			phones.add(new PhoneNumber(type, number));
-		}
-		return phones;
-	}
-
-	private static PhoneType askPhoneType(Scanner scanner) {
-		while (true) {
-			System.out.print("Type (MOBILE/HOME/WORK/OTHER): ");
-			String raw = scanner.nextLine().trim().toUpperCase();
-			try {
-				return PhoneType.valueOf(raw);
-			} catch (IllegalArgumentException ex) {
-				System.out.println("Invalid type. Try again.");
-			}
-		}
-	}
-
-	private static List<EmailAddress> readEmails(Scanner scanner) {
-		List<EmailAddress> emails = new ArrayList<>();
-		while (true) {
-			System.out.print("Add email? (Y/N): ");
-			String ans = scanner.nextLine().trim().toUpperCase();
-			if (!ans.equals("Y")) break;
-
-			EmailType type = askEmailType(scanner);
-			System.out.print("Email address: ");
-			String address = scanner.nextLine().trim();
-			emails.add(new EmailAddress(type, address));
-		}
-		return emails;
-	}
-
-	private static EmailType askEmailType(Scanner scanner) {
-		while (true) {
-			System.out.print("Type (PERSONAL/WORK/OTHER): ");
-			String raw = scanner.nextLine().trim().toUpperCase();
-			try {
-				return EmailType.valueOf(raw);
-			} catch (IllegalArgumentException ex) {
-				System.out.println("Invalid type. Try again.");
-			}
-		}
-	}
-
-	private static String emptyToNull(String s) {
-		return (s == null || s.trim().isEmpty()) ? null : s.trim();
-	}
-
-	private static String blankToNull(String s) {
-		return (s == null || s.trim().isEmpty()) ? null : s.trim();
-	}
-
-	private static String prompt(Scanner scanner, String message) {
-		System.out.print(message);
-		return scanner.nextLine();
-	}
+ class Main {
+
+    public static void main(String[] args) {
+        UserRepository userRepository = new InMemoryUserRepository();
+        PasswordHasher passwordHasher = new PasswordHasher();
+        RegistrationService registrationService = new RegistrationService(userRepository, passwordHasher);
+
+        AuthenticationStrategy basicStrategy = new BasicAuthStrategy(userRepository, passwordHasher);
+        Map<AuthMethod, AuthenticationStrategy> strategies = new EnumMap<>(AuthMethod.class);
+        strategies.put(AuthMethod.BASIC, basicStrategy);
+        AuthService authService = new AuthService(strategies, SessionManager.getInstance());
+
+        CommandHistory history = new CommandHistory();
+
+        InMemoryContactRepository contactRepository = new InMemoryContactRepository();
+        ContactService contactService = new ContactService(contactRepository);
+
+        ContactRenderer renderer = new ConsoleContactRenderer();
+
+        ContactEditService editService = new ContactEditService(contactRepository);
+        ContactCommandHistory contactHistory = new ContactCommandHistory();
+
+        ContactDeletionService deletionService = new ContactDeletionService(contactRepository);
+
+        GroupService groupService = new GroupService(contactRepository);
+
+        System.out.println("=== MyContacts App - UC-08 ===");
+
+        try (Scanner scanner = new Scanner(System.in)) {
+            boolean running = true;
+            while (running) {
+                System.out.println();
+                System.out.println("1)  Register new user");
+                System.out.println("2)  Login");
+                System.out.println("3)  View Profile");
+                System.out.println("4)  Update Full Name");
+                System.out.println("5)  Change Password");
+                System.out.println("6)  Undo last profile change");
+                System.out.println("7)  Redo profile change");
+                System.out.println("8)  Create Contact (Person)");
+                System.out.println("9)  Create Contact (Organization)");
+                System.out.println("10) List My Contacts");
+                System.out.println("11) View Contact Details ");
+                System.out.println("12) Edit Contact ");
+                System.out.println("13) Undo last contact edit ");
+                System.out.println("14) Redo contact edit ");
+                System.out.println("15) Delete Contact ");
+                System.out.println("16) View Trash ");
+                System.out.println("17) Restore from Trash ");
+                System.out.println("18) Purge from Trash ");
+                System.out.println("19) Create Group ");
+                System.out.println("20) Add Contact to Group ");
+                System.out.println("21) Remove Contact from Group ");
+                System.out.println("22) List Groups ");
+                System.out.println("23) Bulk Soft Delete Group ");
+                System.out.println("24) Bulk Export Group");
+                System.out.println("25) Who am I?");
+                System.out.println("26) Logout");
+                System.out.println("27) Exit");
+                System.out.print("Choose an option: ");
+                String choice = scanner.nextLine().trim();
+
+                switch (choice) {
+                    case "1" -> handleRegistration(scanner, registrationService);
+                    case "2" -> handleBasicLogin(scanner, authService);
+                    case "3" -> handleViewProfile(authService);
+                    case "4" -> handleUpdateFullName(scanner, authService, userRepository, history);
+                    case "5" -> handleChangePassword(scanner, authService, userRepository, passwordHasher, history);
+                    case "6" -> System.out.println(history.undo());
+                    case "7" -> System.out.println(history.redo());
+                    case "8" -> handleCreatePerson(scanner, authService, contactService);
+                    case "9" -> handleCreateOrganization(scanner, authService, contactService);
+                    case "10" -> handleListContacts(authService, contactService);
+                    case "11" -> handleViewContactDetails(scanner, authService, contactService, renderer);
+                    case "12" -> handleEditContact(scanner, authService, contactService, editService, contactHistory);
+                    case "13" -> System.out.println(contactHistory.undo());
+                    case "14" -> System.out.println(contactHistory.redo());
+                    case "15" -> handleDeleteContact(scanner, authService, contactService, deletionService);
+                    case "16" -> handleViewTrash(scanner, authService, deletionService);
+                    case "17" -> handleRestoreFromTrash(scanner, authService, deletionService);
+                    case "18" -> handlePurgeFromTrash(scanner, authService, deletionService);
+                    case "19" -> handleCreateGroup(scanner, authService, groupService);
+                    case "20" -> handleAddContactToGroup(scanner, authService, contactService, groupService);
+                    case "21" -> handleRemoveContactFromGroup(scanner, authService, groupService);
+                    case "22" -> handleListGroups(scanner, authService, groupService);
+                    case "23" -> handleBulkSoftDeleteGroup(scanner, authService, groupService, deletionService);
+                    case "24" -> handleBulkExportGroup(scanner, authService, groupService, contactRepository, renderer);
+                    case "25" -> handleWhoAmI(authService);
+                    case "26" -> handleLogout(authService);
+                    case "27" -> {
+                        running = false;
+                        System.out.println("Goodbye!");
+                    }
+                    default -> System.out.println("Invalid choice. Try again.");
+                }
+            }
+        }
+    }
+
+    // ===== UC-01 =====
+    private static void handleRegistration(Scanner scanner, RegistrationService registrationService) {
+        System.out.print("Enter full name: ");
+        String fullName = scanner.nextLine().trim();
+
+        System.out.print("Enter email: ");
+        String email = scanner.nextLine().trim();
+
+        System.out.print("Enter password: ");
+        String password = scanner.nextLine();
+
+        System.out.print("User type (FREE/PREMIUM): ");
+        String typeRaw = scanner.nextLine().trim().toUpperCase();
+
+        try {
+            UserType type = UserType.valueOf(typeRaw);
+            User user = registrationService.register(fullName, email, password, type);
+            System.out.println("\nRegistration successful!");
+            System.out.println("User ID: " + user.getId());
+            System.out.println("Name   : " + user.getFullName());
+            System.out.println("Email  : " + user.getEmail());
+            System.out.println("Type   : " + type);
+            System.out.println("Created: " + user.getCreatedAt());
+        } catch (IllegalArgumentException e) {
+            System.out.println("Invalid user type. Please enter FREE or PREMIUM.");
+        } catch (ValidationException e) {
+            System.out.println("Registration failed: " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println("Unexpected error: " + e.getMessage());
+        }
+    }
+
+    // ===== UC-02 =====
+    private static void handleBasicLogin(Scanner scanner, AuthService authService) {
+        System.out.print("Email: ");
+        String email = scanner.nextLine().trim();
+        System.out.print("Password: ");
+        String password = scanner.nextLine();
+
+        Optional<User> user = authService.login(AuthInput.basic(email, password));
+        if (user.isPresent()) {
+            System.out.println("Login successful. Welcome, " + user.get().getFullName() + "!");
+        } else {
+            System.out.println("Login failed. Invalid credentials.");
+        }
+    }
+
+    private static void handleViewProfile(AuthService authService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        User u = current.get();
+        String type = (u instanceof PremiumUser) ? "PREMIUM" : "FREE";
+        System.out.println("\n=== Profile ===");
+        System.out.println("Name       : " + u.getFullName());
+        System.out.println("Email      : " + u.getEmail());
+        System.out.println("Type       : " + type);
+        System.out.println("Created    : " + u.getCreatedAt());
+    }
+
+    private static void handleUpdateFullName(Scanner scanner,
+                                             AuthService authService,
+                                             UserRepository repository,
+                                             CommandHistory history) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        System.out.print("Enter new full name: ");
+        String newName = scanner.nextLine().trim();
+
+        try {
+            ProfileCommand cmd = new UpdateFullNameCommand(repository, current.get(), newName);
+            cmd.execute();
+            history.record(cmd);
+            System.out.println("Full name updated.");
+        } catch (IllegalArgumentException ex) {
+            System.out.println("Update failed: " + ex.getMessage());
+        }
+    }
+
+    private static void handleChangePassword(Scanner scanner,
+                                             AuthService authService,
+                                             UserRepository repository,
+                                             PasswordHasher hasher,
+                                             CommandHistory history) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        System.out.print("Enter current password: ");
+        String currentPw = scanner.nextLine();
+        System.out.print("Enter new password: ");
+        String newPw = scanner.nextLine();
+
+        try {
+            ProfileCommand cmd = new ChangePasswordCommand(repository, hasher, current.get(), currentPw, newPw);
+            cmd.execute();
+            history.record(cmd);
+            System.out.println("Password changed.");
+        } catch (IllegalArgumentException ex) {
+            System.out.println("Change failed: " + ex.getMessage());
+        }
+    }
+
+    private static void handleWhoAmI(AuthService authService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isPresent()) {
+            User u = current.get();
+            System.out.println("Currently logged in as: " + u.getFullName() + " <" + u.getEmail() + ">");
+        } else {
+            System.out.println("No user is logged in.");
+        }
+    }
+
+    private static void handleLogout(AuthService authService) {
+        authService.logout();
+        System.out.println("Logged out.");
+    }
+
+    // ===== UC-04 =====
+    private static void handleCreatePerson(Scanner scanner,
+                                           AuthService authService,
+                                           ContactService contactService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+
+        System.out.print("First name (optional): ");
+        String first = emptyToNull(scanner.nextLine());
+        System.out.print("Last name (optional): ");
+        String last = emptyToNull(scanner.nextLine());
+
+        List<PhoneNumber> phones = readPhones(scanner);
+        List<EmailAddress> emails = readEmails(scanner);
+
+        try {
+            PersonContact c = contactService.createPerson(current.get().getId(), first, last, phones, emails);
+            System.out.println("Person contact created with ID: " + c.getId());
+        } catch (IllegalArgumentException ex) {
+            System.out.println("Create failed: " + ex.getMessage());
+        }
+    }
+
+    private static void handleCreateOrganization(Scanner scanner,
+                                                 AuthService authService,
+                                                 ContactService contactService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+
+        System.out.print("Organization name: ");
+        String org = scanner.nextLine().trim();
+
+        List<PhoneNumber> phones = readPhones(scanner);
+        List<EmailAddress> emails = readEmails(scanner);
+
+        try {
+            OrganizationContact c = contactService.createOrganization(current.get().getId(), org, phones, emails);
+            System.out.println("Organization contact created with ID: " + c.getId());
+        } catch (IllegalArgumentException ex) {
+            System.out.println("Create failed: " + ex.getMessage());
+        }
+    }
+
+    private static void handleListContacts(AuthService authService, ContactService contactService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        List<Contact> list = contactService.listMyContacts(current.get().getId());
+        if (list.isEmpty()) {
+            System.out.println("You have no contacts.");
+            return;
+        }
+        System.out.println("\n=== My Contacts ===");
+        for (Contact c : list) {
+            System.out.println("- " + c.toString());
+        }
+    }
+
+    // ===== UC-05 =====
+    private static void handleViewContactDetails(Scanner scanner,
+                                                 AuthService authService,
+                                                 ContactService contactService,
+                                                 ContactRenderer renderer) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        UUID userId = current.get().getId();
+
+        List<Contact> contacts = contactService.listMyContacts(userId);
+        if (contacts.isEmpty()) {
+            System.out.println("You have no contacts to view.");
+            return;
+        }
+
+        System.out.println("\n=== Select a Contact ===");
+        for (int i = 0; i < contacts.size(); i++) {
+            Contact c = contacts.get(i);
+            System.out.printf("%2d) %s [id=%s]%n", i + 1, summarize(c), c.getId());
+        }
+        System.out.print("Enter number or paste Contact ID: ");
+        String sel = scanner.nextLine().trim();
+
+        Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
+        if (chosen.isEmpty()) {
+            System.out.println("Invalid selection.");
+            return;
+        }
+
+        boolean uppercase = askYesNo(scanner, "Uppercase name? (Y/N): ");
+        boolean maskEmails = askYesNo(scanner, "Mask emails? (Y/N): ");
+
+        ContactRendererOptions options = ContactRendererOptions.builder()
+                .uppercaseName(uppercase)
+                .maskEmails(maskEmails)
+                .build();
+
+        String rendered = renderer.render(chosen.get(), options);
+        System.out.println(rendered);
+    }
+
+    // ===== UC-06 =====
+    private static void handleEditContact(Scanner scanner,
+                                          AuthService authService,
+                                          ContactService contactService,
+                                          ContactEditService editService,
+                                          ContactCommandHistory contactHistory) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        UUID userId = current.get().getId();
+
+        List<Contact> contacts = contactService.listMyContacts(userId);
+        if (contacts.isEmpty()) {
+            System.out.println("You have no contacts to edit.");
+            return;
+        }
+
+        System.out.println("\n=== Select a Contact to Edit ===");
+        for (int i = 0; i < contacts.size(); i++) {
+            Contact c = contacts.get(i);
+            System.out.printf("%2d) %s [id=%s]%n", i + 1, summarize(c), c.getId());
+        }
+        System.out.print("Enter number or paste Contact ID: ");
+        String sel = scanner.nextLine().trim();
+
+        Optional<Contact> chosenOpt = chooseContactFromInput(contacts, sel);
+        if (chosenOpt.isEmpty()) {
+            System.out.println("Invalid selection.");
+            return;
+        }
+        Contact chosen = chosenOpt.get();
+
+        if (chosen instanceof PersonContact) {
+            System.out.println("\nEdit Person Contact:");
+            System.out.println("1) Update first/last name");
+            System.out.println("2) Replace phone numbers");
+            System.out.println("3) Replace email addresses");
+            System.out.print("Choose: ");
+            String csel = scanner.nextLine().trim();
+            switch (csel) {
+                case "1" -> {
+                    System.out.print("New first name (blank to keep): ");
+                    String first = scanner.nextLine();
+                    System.out.print("New last name  (blank to keep): ");
+                    String last = scanner.nextLine();
+                    EditPersonNameCommand cmd = new EditPersonNameCommand(
+                            editService, chosen.getId(),
+                            blankToNull(first), blankToNull(last)
+                    );
+                    System.out.println(contactHistory.recordAndExecute(cmd));
+                }
+                case "2" -> {
+                    List<PhoneNumber> phones = readPhones(scanner);
+                    ReplacePhonesCommand cmd = new ReplacePhonesCommand(editService, chosen.getId(), phones);
+                    System.out.println(contactHistory.recordAndExecute(cmd));
+                }
+                case "3" -> {
+                    List<EmailAddress> emails = readEmails(scanner);
+                    ReplaceEmailsCommand cmd = new ReplaceEmailsCommand(editService, chosen.getId(), emails);
+                    System.out.println(contactHistory.recordAndExecute(cmd));
+                }
+                default -> System.out.println("Invalid choice.");
+            }
+        } else if (chosen instanceof OrganizationContact) {
+            System.out.println("\nEdit Organization Contact:");
+            System.out.println("1) Update organization name");
+            System.out.println("2) Replace phone numbers");
+            System.out.println("3) Replace email addresses");
+            System.out.print("Choose: ");
+            String csel = scanner.nextLine().trim();
+            switch (csel) {
+                case "1" -> {
+                    System.out.print("New organization name: ");
+                    String org = scanner.nextLine().trim();
+                    EditOrganizationNameCommand cmd = new EditOrganizationNameCommand(editService, chosen.getId(), org);
+                    System.out.println(contactHistory.recordAndExecute(cmd));
+                }
+                case "2" -> {
+                    List<PhoneNumber> phones = readPhones(scanner);
+                    ReplacePhonesCommand cmd = new ReplacePhonesCommand(editService, chosen.getId(), phones);
+                    System.out.println(contactHistory.recordAndExecute(cmd));
+                }
+                case "3" -> {
+                    List<EmailAddress> emails = readEmails(scanner);
+                    ReplaceEmailsCommand cmd = new ReplaceEmailsCommand(editService, chosen.getId(), emails);
+                    System.out.println(contactHistory.recordAndExecute(cmd));
+                }
+                default -> System.out.println("Invalid choice.");
+            }
+        } else {
+            System.out.println("Unknown contact type.");
+        }
+    }
+
+    // ===== UC-07 =====
+    private static void handleDeleteContact(Scanner scanner,
+                                            AuthService authService,
+                                            ContactService contactService,
+                                            ContactDeletionService deletionService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        UUID ownerId = current.get().getId();
+
+        List<Contact> contacts = contactService.listMyContacts(ownerId);
+        if (contacts.isEmpty()) {
+            System.out.println("You have no contacts to delete.");
+            return;
+        }
+
+        System.out.println("\n=== Select a Contact to Delete ===");
+        for (int i = 0; i < contacts.size(); i++) {
+            Contact c = contacts.get(i);
+            System.out.printf("%2d) %s [id=%s]%n", i + 1, summarize(c), c.getId());
+        }
+        System.out.print("Enter number or paste Contact ID: ");
+        String sel = scanner.nextLine().trim();
+
+        Optional<Contact> chosenOpt = chooseContactFromInput(contacts, sel);
+        if (chosenOpt.isEmpty()) {
+            System.out.println("Invalid selection.");
+            return;
+        }
+        Contact chosen = chosenOpt.get();
+
+        boolean soft = askYesNo(scanner, "Soft delete (Y) or Hard delete (N)? ");
+        String confirm = prompt(scanner, "Type DELETE to confirm: ");
+        if (!"DELETE".equalsIgnoreCase(confirm.trim())) {
+            System.out.println("Deletion cancelled.");
+            return;
+        }
+
+        if (soft) {
+            boolean ok = deletionService.softDelete(ownerId, chosen.getId());
+            System.out.println(ok ? "Contact moved to Trash." : "Soft delete failed.");
+        } else {
+            boolean ok = deletionService.hardDelete(chosen.getId());
+            System.out.println(ok ? "Contact permanently deleted." : "Hard delete failed.");
+        }
+    }
+
+    private static void handleViewTrash(Scanner scanner,
+                                        AuthService authService,
+                                        ContactDeletionService deletionService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        UUID ownerId = current.get().getId();
+
+        List<DeletedContact> trash = deletionService.listTrash(ownerId);
+        if (trash.isEmpty()) {
+            System.out.println("Trash is empty.");
+            return;
+        }
+        System.out.println("\n=== Trash ===");
+        for (int i = 0; i < trash.size(); i++) {
+            DeletedContact dc = trash.get(i);
+            System.out.printf("%2d) %s [id=%s] deletedAt=%s%n",
+                    i + 1,
+                    ConsoleContactRenderer.bestEffortName(dc.contact()),
+                    dc.contact().getId(),
+                    dc.deletedAt()
+            );
+        }
+    }
+
+    private static void handleRestoreFromTrash(Scanner scanner,
+                                               AuthService authService,
+                                               ContactDeletionService deletionService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        UUID ownerId = current.get().getId();
+
+        List<DeletedContact> trash = deletionService.listTrash(ownerId);
+        if (trash.isEmpty()) {
+            System.out.println("Trash is empty.");
+            return;
+        }
+        for (int i = 0; i < trash.size(); i++) {
+            DeletedContact dc = trash.get(i);
+            System.out.printf("%2d) %s [id=%s]%n",
+                    i + 1, ConsoleContactRenderer.bestEffortName(dc.contact()), dc.contact().getId());
+        }
+        System.out.print("Enter number or paste Contact ID to restore: ");
+        String sel = scanner.nextLine().trim();
+
+        Optional<DeletedContact> chosen = chooseDeletedFromInput(trash, sel);
+        if (chosen.isEmpty()) {
+            System.out.println("Invalid selection.");
+            return;
+        }
+        boolean ok = deletionService.restore(ownerId, chosen.get().contact().getId());
+        System.out.println(ok ? "Contact restored." : "Restore failed.");
+    }
+
+    private static void handlePurgeFromTrash(Scanner scanner,
+                                             AuthService authService,
+                                             ContactDeletionService deletionService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) {
+            System.out.println("Please login first.");
+            return;
+        }
+        UUID ownerId = current.get().getId();
+
+        List<DeletedContact> trash = deletionService.listTrash(ownerId);
+        if (trash.isEmpty()) {
+            System.out.println("Trash is empty.");
+            return;
+        }
+        for (int i = 0; i < trash.size(); i++) {
+            DeletedContact dc = trash.get(i);
+            System.out.printf("%2d) %s [id=%s]%n",
+                    i + 1, ConsoleContactRenderer.bestEffortName(dc.contact()), dc.contact().getId());
+        }
+        System.out.print("Enter number or paste Contact ID to purge permanently: ");
+        String sel = scanner.nextLine().trim();
+
+        Optional<DeletedContact> chosen = chooseDeletedFromInput(trash, sel);
+        if (chosen.isEmpty()) {
+            System.out.println("Invalid selection.");
+            return;
+        }
+        String confirm = prompt(scanner, "Type PURGE to confirm: ");
+        if (!"PURGE".equalsIgnoreCase(confirm.trim())) {
+            System.out.println("Purge cancelled.");
+            return;
+        }
+        boolean ok = deletionService.purge(ownerId, chosen.get().contact().getId());
+        System.out.println(ok ? "Contact purged from Trash." : "Purge failed.");
+    }
+
+    // ===== UC-08 =====
+    private static void handleCreateGroup(Scanner scanner,
+                                          AuthService authService,
+                                          GroupService groupService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+
+        System.out.print("Group name: ");
+        String name = scanner.nextLine().trim();
+        boolean ok = groupService.createGroup(current.get().getId(), name);
+        System.out.println(ok ? "Group created." : "Group already exists.");
+    }
+
+    private static void handleAddContactToGroup(Scanner scanner,
+                                                AuthService authService,
+                                                ContactService contactService,
+                                                GroupService groupService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<String> groups = groupService.listGroupNames(ownerId);
+        if (groups.isEmpty()) { System.out.println("No groups. Create one first."); return; }
+        printGroups(groups);
+
+        String groupName = chooseGroupNameFromInput(scanner, groups);
+        if (groupName == null) { System.out.println("Invalid group selection."); return; }
+
+        List<Contact> contacts = contactService.listMyContacts(ownerId);
+        if (contacts.isEmpty()) { System.out.println("You have no contacts."); return; }
+        for (int i = 0; i < contacts.size(); i++) {
+            Contact c = contacts.get(i);
+            System.out.printf("%2d) %s (%s) [id=%s]%n", i + 1, ConsoleContactRenderer.bestEffortName(c),
+                    c.getClass().getSimpleName(), c.getId());
+        }
+        System.out.print("Enter number or paste Contact ID: ");
+        String sel = scanner.nextLine().trim();
+
+        Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
+        if (chosen.isEmpty()) { System.out.println("Invalid selection."); return; }
+
+        boolean ok = groupService.addContact(ownerId, groupName, chosen.get().getId());
+        System.out.println(ok ? "Contact added to group." : "Add failed (missing group or ownership mismatch).");
+    }
+
+    private static void handleRemoveContactFromGroup(Scanner scanner,
+                                                     AuthService authService,
+                                                     GroupService groupService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<String> groups = groupService.listGroupNames(ownerId);
+        if (groups.isEmpty()) { System.out.println("No groups."); return; }
+        printGroups(groups);
+
+        String groupName = chooseGroupNameFromInput(scanner, groups);
+        if (groupName == null) { System.out.println("Invalid group selection."); return; }
+
+        Set<UUID> ids = groupService.flattenContactIds(ownerId, groupName);
+        if (ids.isEmpty()) { System.out.println("Group is empty."); return; }
+        List<UUID> asList = new ArrayList<>(ids);
+        for (int i = 0; i < asList.size(); i++) {
+            System.out.printf("%2d) %s%n", i + 1, asList.get(i));
+        }
+        System.out.print("Enter number or paste Contact ID to remove: ");
+        String sel = scanner.nextLine().trim();
+
+        Optional<UUID> chosen = chooseUuidFromInput(asList, sel);
+        if (chosen.isEmpty()) { System.out.println("Invalid selection."); return; }
+
+        boolean ok = groupService.removeContact(ownerId, groupName, chosen.get());
+        System.out.println(ok ? "Contact removed from group." : "Remove failed.");
+    }
+
+    private static void handleListGroups(Scanner scanner,
+                                         AuthService authService,
+                                         GroupService groupService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<String> groups = groupService.listGroupNames(ownerId);
+        if (groups.isEmpty()) {
+            System.out.println("No groups.");
+            return;
+        }
+        System.out.println("\n=== Groups ===");
+        for (int i = 0; i < groups.size(); i++) {
+            String g = groups.get(i);
+            int size = groupService.flattenContactIds(ownerId, g).size();
+            System.out.printf("%2d) %s (%d contacts)%n", i + 1, g, size);
+        }
+    }
+
+    private static void handleBulkSoftDeleteGroup(Scanner scanner,
+                                                  AuthService authService,
+                                                  GroupService groupService,
+                                                  ContactDeletionService deletionService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<String> groups = groupService.listGroupNames(ownerId);
+        if (groups.isEmpty()) { System.out.println("No groups."); return; }
+        printGroups(groups);
+
+        String groupName = chooseGroupNameFromInput(scanner, groups);
+        if (groupName == null) { System.out.println("Invalid group selection."); return; }
+
+        Set<UUID> ids = groupService.flattenContactIds(ownerId, groupName);
+        if (ids.isEmpty()) { System.out.println("Group is empty."); return; }
+
+        String confirm = prompt(scanner, "Type DELETE GROUP to confirm soft-delete: ");
+        if (!"DELETE GROUP".equalsIgnoreCase(confirm.trim())) {
+            System.out.println("Cancelled.");
+            return;
+        }
+
+        BulkOperation op = new BulkSoftDeleteOperation(deletionService);
+        BulkResult result = op.apply(ownerId, ids);
+        System.out.println(result.summary());
+        result.messages().forEach(System.out::println);
+    }
+
+    private static void handleBulkExportGroup(Scanner scanner,
+                                              AuthService authService,
+                                              GroupService groupService,
+                                              ContactRepository repository,
+                                              ContactRenderer renderer) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<String> groups = groupService.listGroupNames(ownerId);
+        if (groups.isEmpty()) { System.out.println("No groups."); return; }
+        printGroups(groups);
+
+        String groupName = chooseGroupNameFromInput(scanner, groups);
+        if (groupName == null) { System.out.println("Invalid group selection."); return; }
+
+        Set<UUID> ids = groupService.flattenContactIds(ownerId, groupName);
+        if (ids.isEmpty()) { System.out.println("Group is empty."); return; }
+
+        boolean mask = askYesNo(scanner, "Mask emails in export? (Y/N): ");
+        ContactRendererOptions opts = ContactRendererOptions.builder()
+                .uppercaseName(false)
+                .maskEmails(mask)
+                .build();
+
+        BulkExportOperation op = new BulkExportOperation(repository, renderer, opts);
+        BulkResult result = op.apply(ownerId, ids);
+        System.out.println(result.summary());
+        result.messages().forEach(System.out::println);
+    }
+
+    // ===== Helpers =====
+
+    private static String chooseGroupNameFromInput(Scanner scanner, List<String> groups) {
+        System.out.print("Select group (number or name): ");
+        String sel = scanner.nextLine().trim();
+        try {
+            int idx = Integer.parseInt(sel);
+            if (idx >= 1 && idx <= groups.size()) {
+                return groups.get(idx - 1);
+            }
+        } catch (NumberFormatException ignored) { }
+        for (String g : groups) {
+            if (g.equalsIgnoreCase(sel)) return g;
+        }
+        return null;
+    }
+
+    private static void printGroups(List<String> groups) {
+        System.out.println("\n=== Groups ===");
+        for (int i = 0; i < groups.size(); i++) {
+            System.out.printf("%2d) %s%n", i + 1, groups.get(i));
+        }
+    }
+
+    private static Optional<Contact> chooseContactFromInput(List<Contact> contacts, String sel) {
+        Optional<Contact> chosen = Optional.empty();
+        try {
+            UUID id = UUID.fromString(sel);
+            chosen = contacts.stream().filter(c -> c.getId().equals(id)).findFirst();
+        } catch (IllegalArgumentException ignored) {
+            try {
+                int idx = Integer.parseInt(sel);
+                if (idx >= 1 && idx <= contacts.size()) {
+                    chosen = Optional.of(contacts.get(idx - 1));
+                }
+            } catch (NumberFormatException ignored2) { }
+        }
+        return chosen;
+    }
+
+    private static Optional<DeletedContact> chooseDeletedFromInput(List<DeletedContact> list, String sel) {
+        Optional<DeletedContact> chosen = Optional.empty();
+        try {
+            UUID id = UUID.fromString(sel);
+            chosen = list.stream().filter(dc -> dc.contact().getId().equals(id)).findFirst();
+        } catch (IllegalArgumentException ignored) {
+            try {
+                int idx = Integer.parseInt(sel);
+                if (idx >= 1 && idx <= list.size()) {
+                    chosen = Optional.of(list.get(idx - 1));
+                }
+            } catch (NumberFormatException ignored2) { }
+        }
+        return chosen;
+    }
+
+    private static Optional<UUID> chooseUuidFromInput(List<UUID> list, String sel) {
+        try {
+            UUID id = UUID.fromString(sel);
+            return list.contains(id) ? Optional.of(id) : Optional.empty();
+        } catch (IllegalArgumentException ignored) {
+            try {
+                int idx = Integer.parseInt(sel);
+                if (idx >= 1 && idx <= list.size()) {
+                    return Optional.of(list.get(idx - 1));
+                }
+            } catch (NumberFormatException ignored2) { }
+        }
+        return Optional.empty();
+    }
+
+    private static boolean askYesNo(Scanner scanner, String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String a = scanner.nextLine().trim().toUpperCase(Locale.ROOT);
+            if (a.equals("Y")) return true;
+            if (a.equals("N")) return false;
+            System.out.println("Please enter Y or N.");
+        }
+    }
+
+    private static String summarize(Contact c) {
+        String name = ConsoleContactRenderer.bestEffortName(c);
+        String kind = c.getClass().getSimpleName();
+        return name + " (" + kind + ")";
+    }
+
+    private static List<PhoneNumber> readPhones(Scanner scanner) {
+        List<PhoneNumber> phones = new ArrayList<>();
+        while (true) {
+            System.out.print("Add phone? (Y/N): ");
+            String ans = scanner.nextLine().trim().toUpperCase();
+            if (!ans.equals("Y")) break;
+
+            PhoneType type = askPhoneType(scanner);
+            System.out.print("Phone number: ");
+            String number = scanner.nextLine().trim();
+            phones.add(new PhoneNumber(type, number));
+        }
+        return phones;
+    }
+
+    private static PhoneType askPhoneType(Scanner scanner) {
+        while (true) {
+            System.out.print("Type (MOBILE/HOME/WORK/OTHER): ");
+            String raw = scanner.nextLine().trim().toUpperCase();
+            try {
+                return PhoneType.valueOf(raw);
+            } catch (IllegalArgumentException ex) {
+                System.out.println("Invalid type. Try again.");
+            }
+        }
+    }
+
+    private static List<EmailAddress> readEmails(Scanner scanner) {
+        List<EmailAddress> emails = new ArrayList<>();
+        while (true) {
+            System.out.print("Add email? (Y/N): ");
+            String ans = scanner.nextLine().trim().toUpperCase();
+            if (!ans.equals("Y")) break;
+
+            EmailType type = askEmailType(scanner);
+            System.out.print("Email address: ");
+            String address = scanner.nextLine().trim();
+            emails.add(new EmailAddress(type, address));
+        }
+        return emails;
+    }
+
+    private static EmailType askEmailType(Scanner scanner) {
+        while (true) {
+            System.out.print("Type (PERSONAL/WORK/OTHER): ");
+            String raw = scanner.nextLine().trim().toUpperCase();
+            try {
+                return EmailType.valueOf(raw);
+            } catch (IllegalArgumentException ex) {
+                System.out.println("Invalid type. Try again.");
+            }
+        }
+    }
+
+    private static String emptyToNull(String s) {
+        return (s == null || s.trim().isEmpty()) ? null : s.trim();
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.trim().isEmpty()) ? null : s.trim();
+    }
+
+    private static String prompt(Scanner scanner, String message) {
+        System.out.print(message);
+        return scanner.nextLine();
+    }
 }
