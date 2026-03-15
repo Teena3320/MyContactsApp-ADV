@@ -102,18 +102,17 @@ public final class ConsoleContactRenderer implements ContactRenderer {
             String val = invokeString(c, m);
             if (val != null && !val.trim().isEmpty()) return val.trim();
         }
+        // Try compose from first/last if available
         String first = invokeString(c, "getFirstName");
         String last = invokeString(c, "getLastName");
         if ((first != null && !first.isBlank()) || (last != null && !last.isBlank())) {
             return ((first == null ? "" : first) + " " + (last == null ? "" : last)).trim();
         }
-        // Fallback
         return String.valueOf(c);
     }
 
     private static Map<String, String> bestEffortExtras(Contact c) {
         Map<String, String> extras = new LinkedHashMap<>();
-        // Person-ish fields
         String first = invokeString(c, "getFirstName");
         if (notBlank(first)) extras.put("First Name", first);
         String last = invokeString(c, "getLastName");
@@ -128,7 +127,6 @@ public final class ConsoleContactRenderer implements ContactRenderer {
 
     @SuppressWarnings("unchecked")
     private static List<PhoneNumber> bestEffortPhones(Contact c) {
-        // Try getPhones(), getPhoneNumbers()
         List<String> candidates = Arrays.asList("getPhones", "getPhoneNumbers");
         for (String m : candidates) {
             Object v = invoke(c, m);
@@ -162,6 +160,7 @@ public final class ConsoleContactRenderer implements ContactRenderer {
         Object v = invoke(c, method);
         if (v == null) return null;
         try {
+            // Attempt java.time.* temporal
             Method fmt = v.getClass().getMethod("format", java.time.format.DateTimeFormatter.class);
             Object s = fmt.invoke(v, TS_FMT);
             return String.valueOf(s);

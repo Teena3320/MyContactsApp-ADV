@@ -3,28 +3,27 @@ package app;
 import domain.*;
 import services.*;
 import util.ValidationException;
-
 import java.util.*;
 /**
- * Use Case 5: View Contact Details
+ * Use Case 6: Edit Contact
  *
  *   This module enables:
- *   - Listing all stored contacts for the logged‑in user
- *   - Selecting a specific contact to display full information
- *   - Rendering formatted details (name, type, phones, emails, timestamps)
+ *   - Selecting an existing contact belonging to the logged‑in user
+ *   - Modifying key attributes (names, organization fields, phones, emails)
+ *   - Persisting updated immutable Contact objects through safe reconstruction
  *   Optional enhancements:
- *   - Uppercasing the contact name for emphasis
- *   - Masking email addresses for privacy
+ *   - Full Undo/Redo support using the Command Pattern
+ *   - Granular editing commands (name update, phone replace, email replace)
  *
  *   Demonstrates:
- *   - Read‑only display rendering with clean formatting
- *   - Decorator Pattern for optional display enhancements
- *   - Polymorphic behavior for PersonContact / OrganizationContact
- *   - Safe access to immutable view objects
- *   - Separation of display logic using a dedicated ContactRenderer
- * 
+ *   - Controlled mutation through immutable object rebuilding
+ *   - Command Pattern for reversible edit operations
+ *   - Memento‑style state preservation for undo/redo stacks
+ *   - Polymorphic update handling for PersonContact / OrganizationContact
+ *   - Clean separation of concerns using ContactEditService and edit commands
+ *
  * @author tseb3003
- * @version 5.0
+ * @version 6.0
  */
 
 public class Main {
@@ -46,7 +45,10 @@ public class Main {
 
      ContactRenderer renderer = new ConsoleContactRenderer();
 
-     System.out.println("=== MyContacts App - UC-05 ===");
+     ContactEditService editService = new ContactEditService(contactRepository);
+     ContactCommandHistory contactHistory = new ContactCommandHistory();
+
+     System.out.println("=== MyContacts App - UC-06 ===");
 
      try (Scanner scanner = new Scanner(System.in)) {
          boolean running = true;
@@ -57,15 +59,18 @@ public class Main {
              System.out.println("3)  View Profile");
              System.out.println("4)  Update Full Name");
              System.out.println("5)  Change Password");
-             System.out.println("6)  Undo last change");
-             System.out.println("7)  Redo change");
+             System.out.println("6)  Undo last profile change");
+             System.out.println("7)  Redo profile change");
              System.out.println("8)  Create Contact ");
-             System.out.println("9)  Create Contact ");
+             System.out.println("9)  Create Contact");
              System.out.println("10) List My Contacts");
-             System.out.println("11) View Contact Details");
-             System.out.println("12) Who am I?");
-             System.out.println("13) Logout");
-             System.out.println("14) Exit");
+             System.out.println("11) View Contact Details ");
+             System.out.println("12) Edit Contact ");
+             System.out.println("13) Undo last contact edit ");
+             System.out.println("14) Redo contact edit ");
+             System.out.println("15) Who am I?");
+             System.out.println("16) Logout");
+             System.out.println("17) Exit");
              System.out.print("Choose an option: ");
              String choice = scanner.nextLine().trim();
 
@@ -81,9 +86,12 @@ public class Main {
                  case "9" -> handleCreateOrganization(scanner, authService, contactService);
                  case "10" -> handleListContacts(authService, contactService);
                  case "11" -> handleViewContactDetails(scanner, authService, contactService, renderer);
-                 case "12" -> handleWhoAmI(authService);
-                 case "13" -> handleLogout(authService);
-                 case "14" -> {
+                 case "12" -> handleEditContact(scanner, authService, contactService, editService, contactHistory);
+                 case "13" -> System.out.println(contactHistory.undo());
+                 case "14" -> System.out.println(contactHistory.redo());
+                 case "15" -> handleWhoAmI(authService);
+                 case "16" -> handleLogout(authService);
+                 case "17" -> {
                      running = false;
                      System.out.println("Goodbye!");
                  }
@@ -124,6 +132,7 @@ public class Main {
      }
  }
 
+ // ===== UC-02 =====
  private static void handleBasicLogin(Scanner scanner, AuthService authService) {
      System.out.print("Email: ");
      String email = scanner.nextLine().trim();
@@ -305,20 +314,7 @@ public class Main {
      System.out.print("Enter number or paste Contact ID: ");
      String sel = scanner.nextLine().trim();
 
-     Optional<Contact> chosen = Optional.empty();
-     try {
-         UUID id = UUID.fromString(sel);
-         chosen = contacts.stream().filter(c -> c.getId().equals(id)).findFirst();
-     } catch (IllegalArgumentException ignored) {
-         try {
-             int idx = Integer.parseInt(sel);
-             if (idx >= 1 && idx <= contacts.size()) {
-                 chosen = Optional.of(contacts.get(idx - 1));
-             }
-         } catch (NumberFormatException nfe) {
-         }
-     }
-
+     Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
      if (chosen.isEmpty()) {
          System.out.println("Invalid selection.");
          return;
@@ -334,6 +330,119 @@ public class Main {
 
      String rendered = renderer.render(chosen.get(), options);
      System.out.println(rendered);
+ }
+
+ private static void handleEditContact(Scanner scanner,
+                                       AuthService authService,
+                                       ContactService contactService,
+                                       ContactEditService editService,
+                                       ContactCommandHistory contactHistory) {
+     Optional<User> current = authService.currentUser();
+     if (current.isEmpty()) {
+         System.out.println("Please login first.");
+         return;
+     }
+     UUID userId = current.get().getId();
+
+     List<Contact> contacts = contactService.listMyContacts(userId);
+     if (contacts.isEmpty()) {
+         System.out.println("You have no contacts to edit.");
+         return;
+     }
+
+     System.out.println("\n=== Select a Contact to Edit ===");
+     for (int i = 0; i < contacts.size(); i++) {
+         Contact c = contacts.get(i);
+         System.out.printf("%2d) %s [id=%s]%n", i + 1, summarize(c), c.getId());
+     }
+     System.out.print("Enter number or paste Contact ID: ");
+     String sel = scanner.nextLine().trim();
+
+     Optional<Contact> chosenOpt = chooseContactFromInput(contacts, sel);
+     if (chosenOpt.isEmpty()) {
+         System.out.println("Invalid selection.");
+         return;
+     }
+     Contact chosen = chosenOpt.get();
+
+     if (chosen instanceof PersonContact) {
+         System.out.println("\nEdit Person Contact:");
+         System.out.println("1) Update first/last name");
+         System.out.println("2) Replace phone numbers");
+         System.out.println("3) Replace email addresses");
+         System.out.print("Choose: ");
+         String csel = scanner.nextLine().trim();
+         switch (csel) {
+             case "1" -> {
+                 System.out.print("New first name (blank to keep): ");
+                 String first = scanner.nextLine();
+                 System.out.print("New last name  (blank to keep): ");
+                 String last = scanner.nextLine();
+                 EditPersonNameCommand cmd = new EditPersonNameCommand(
+                         editService, chosen.getId(),
+                         blankToNull(first), blankToNull(last)
+                 );
+                 System.out.println(contactHistory.recordAndExecute(cmd));
+             }
+             case "2" -> {
+                 List<PhoneNumber> phones = readPhones(scanner);
+                 ReplacePhonesCommand cmd = new ReplacePhonesCommand(editService, chosen.getId(), phones);
+                 System.out.println(contactHistory.recordAndExecute(cmd));
+             }
+             case "3" -> {
+                 List<EmailAddress> emails = readEmails(scanner);
+                 ReplaceEmailsCommand cmd = new ReplaceEmailsCommand(editService, chosen.getId(), emails);
+                 System.out.println(contactHistory.recordAndExecute(cmd));
+             }
+             default -> System.out.println("Invalid choice.");
+         }
+     } else if (chosen instanceof OrganizationContact) {
+         System.out.println("\nEdit Organization Contact:");
+         System.out.println("1) Update organization name");
+         System.out.println("2) Replace phone numbers");
+         System.out.println("3) Replace email addresses");
+         System.out.print("Choose: ");
+         String csel = scanner.nextLine().trim();
+         switch (csel) {
+             case "1" -> {
+                 System.out.print("New organization name: ");
+                 String org = scanner.nextLine().trim();
+                 EditOrganizationNameCommand cmd = new EditOrganizationNameCommand(editService, chosen.getId(), org);
+                 System.out.println(contactHistory.recordAndExecute(cmd));
+             }
+             case "2" -> {
+                 List<PhoneNumber> phones = readPhones(scanner);
+                 ReplacePhonesCommand cmd = new ReplacePhonesCommand(editService, chosen.getId(), phones);
+                 System.out.println(contactHistory.recordAndExecute(cmd));
+             }
+             case "3" -> {
+                 List<EmailAddress> emails = readEmails(scanner);
+                 ReplaceEmailsCommand cmd = new ReplaceEmailsCommand(editService, chosen.getId(), emails);
+                 System.out.println(contactHistory.recordAndExecute(cmd));
+             }
+             default -> System.out.println("Invalid choice.");
+         }
+     } else {
+         System.out.println("Unknown contact type.");
+     }
+ }
+
+
+ private static Optional<Contact> chooseContactFromInput(List<Contact> contacts, String sel) {
+     Optional<Contact> chosen = Optional.empty();
+     try {
+         UUID id = UUID.fromString(sel);
+         chosen = contacts.stream().filter(c -> c.getId().equals(id)).findFirst();
+     } catch (IllegalArgumentException ignored) {
+         try {
+             int idx = Integer.parseInt(sel);
+             if (idx >= 1 && idx <= contacts.size()) {
+                 chosen = Optional.of(contacts.get(idx - 1));
+             }
+         } catch (NumberFormatException ignored2) {
+         }
+     }
+     return chosen;
  }
 
  private static boolean askYesNo(Scanner scanner, String prompt) {
@@ -407,6 +516,10 @@ public class Main {
  }
 
  private static String emptyToNull(String s) {
+     return (s == null || s.trim().isEmpty()) ? null : s.trim();
+ }
+
+ private static String blankToNull(String s) {
      return (s == null || s.trim().isEmpty()) ? null : s.trim();
  }
 }
