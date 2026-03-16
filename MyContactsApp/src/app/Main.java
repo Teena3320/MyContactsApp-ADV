@@ -6,35 +6,36 @@ import util.ValidationException;
 
 import java.util.*;
 /**
- * Use Case 11: Create and Manage Tags
+ * Use Case 12: Apply Tags to Contacts
  *
  *   This module enables:
- *   - Creating owner‑scoped tags with normalized names (case‑insensitive)
- *   - Assigning and removing tags to/from contacts (many‑to‑many)
- *   - Listing all tags and querying contacts by a given tag
+ *   - Assigning one or more tags to a contact owned by the logged‑in user
+ *   - Removing existing tags from a contact
+ *   - Broadcasting tag changes to interested listeners (observers) in real time
  *   Optional enhancements:
- *   - Tag rename/merge operations and duplicate resolution
- *   - Visual attributes (color/emoji) for UI emphasis
- *   - Predefined tag sets (e.g., Enum‑backed starter categories)
+ *   - Batched (multi‑contact) tagging with transactional semantics
+ *   - Throttled/debounced notifications and audit logging
+ *   - UI signal integration (toast, badge update, activity stream)
  *
  *   Demonstrates:
- *   - Flyweight‑style reuse of Tag value objects per owner
- *   - Many‑to‑many association management (Contact ↔ Tag)
- *   - Robust normalization and equality semantics for value objects
- *   - Clear separation of concerns: tag catalog vs. contact‑tag links
- *   - Safe access patterns (immutable views of tag collections)
+ *   - Observer Pattern for reacting to tag assignment/removal events
+ *   - Value object reuse via Tag flyweight semantics (normalized equality)
+ *   - Clear separation of concerns (Tag catalog vs. Contact‑Tag associations)
+ *   - Immutable event payloads (ownerId, contactId, tag, eventType, timestamp)
+ *   - Safe, owner‑scoped operations with repository checks
  *
  *   Components:
- *   - Tag            : Value object (normalized name, display label)
- *   - TagService     : Owner‑scoped registry + contact‑tag associations
- *   - Integrations   : Works alongside ContactService and view rendering
+ *   - TagService       : Assigns/removes tags; publishes TagEvent notifications
+ *   - TagObserver      : Observer interface for tag change callbacks
+ *   - ConsoleTagObserver : Sample observer that logs tag events to console
+ *   - TagEvent/Type    : Event record + ASSIGNED/REMOVED discriminators
  *
  *   Notes:
- *   - All tag operations are scoped to the logged‑in owner (user).
- *   - Normalization ensures "Work" and "work" refer to the same Tag.
+ *   - Tags are created on first assignment if absent (owner‑scoped)
+ *   - Normalization ensures "Work" and "work" resolve to the same underlying Tag
  *
  * @author tseb3003
- * @version 11.0
+ * @version 12.0
  */
 public class Main {
 
@@ -67,8 +68,9 @@ public class Main {
         FilterSortService filterSortService = new FilterSortService(contactRepository);
 
         TagService tagService = new TagService(contactRepository);
+        tagService.addObserver(new ConsoleTagObserver()); // UC-12: observe tag changes
 
-        System.out.println("=== MyContacts App - UC-11 ===");
+        System.out.println("=== MyContacts App - UC-12 ===");
 
         try (Scanner scanner = new Scanner(System.in)) {
             boolean running = true;
@@ -86,25 +88,25 @@ public class Main {
                 System.out.println("10) List My Contacts");
                 System.out.println("11) View Contact Details ");
                 System.out.println("12) Edit Contact ");
-                System.out.println("13) Undo last contact edit");
+                System.out.println("13) Undo last contact edit ");
                 System.out.println("14) Redo contact edit ");
-                System.out.println("15) Delete Contact ");
+                System.out.println("15) Delete Contact");
                 System.out.println("16) View Trash ");
                 System.out.println("17) Restore from Trash ");
                 System.out.println("18) Purge from Trash ");
                 System.out.println("19) Create Group ");
                 System.out.println("20) Add Contact to Group ");
-                System.out.println("21) Remove Contact from Group");
+                System.out.println("21) Remove Contact from Group ");
                 System.out.println("22) List Groups ");
                 System.out.println("23) Bulk Soft Delete Group ");
                 System.out.println("24) Bulk Export Group ");
                 System.out.println("25) Search Contacts ");
                 System.out.println("26) Advanced Filter & Sort ");
                 System.out.println("27) Tag: Create ");
-                System.out.println("28) Tag: List All");
-                System.out.println("29) Tag: Assign to Contact");
+                System.out.println("28) Tag: List All ");
+                System.out.println("29) Tag: Assign to Contact ");
                 System.out.println("30) Tag: Remove from Contact ");
-                System.out.println("31) Tag: Show Contact's Tags");
+                System.out.println("31) Tag: Show Contact's Tags ");
                 System.out.println("32) Tag: List Contacts by Tag ");
                 System.out.println("33) Who am I?");
                 System.out.println("34) Logout");
@@ -391,7 +393,7 @@ public class Main {
         String rendered = renderer.render(chosen.get(), options);
         System.out.println(rendered);
 
-        // Show tags (UC-11)
+        // Show tags
         Set<Tag> tags = tagService.tagsForContact(userId, chosen.get().getId());
         if (tags.isEmpty()) {
             System.out.println("Tags     : (none)");
@@ -978,7 +980,7 @@ public class Main {
         }
     }
 
-    // ===== UC-11 =====
+    // ===== UC-11/12 Tag Handlers =====
 
     private static void handleCreateTag(Scanner scanner,
                                         AuthService authService,
@@ -1030,14 +1032,8 @@ public class Main {
         Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
         if (chosen.isEmpty()) { System.out.println("Invalid selection."); return; }
 
-        List<Tag> tags = tagService.listTags(ownerId);
-        if (tags.isEmpty()) {
-            System.out.println("No tags available. Create one first.");
-            return;
-        }
-        printTags(tags);
-        String tagName = chooseTagNameFromInput(scanner, tags);
-        if (tagName == null) { System.out.println("Invalid tag selection."); return; }
+        System.out.print("Tag name (existing or new): ");
+        String tagName = scanner.nextLine().trim();
 
         boolean ok = tagService.assignTag(ownerId, chosen.get().getId(), tagName);
         System.out.println(ok ? "Tag assigned to contact." : "Assign failed.");
@@ -1064,15 +1060,8 @@ public class Main {
         Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
         if (chosen.isEmpty()) { System.out.println("Invalid selection."); return; }
 
-        Set<Tag> tags = tagService.tagsForContact(ownerId, chosen.get().getId());
-        if (tags.isEmpty()) {
-            System.out.println("This contact has no tags.");
-            return;
-        }
-        List<Tag> asList = new ArrayList<>(tags);
-        printTags(asList);
-        String tagName = chooseTagNameFromInput(scanner, asList);
-        if (tagName == null) { System.out.println("Invalid tag selection."); return; }
+        System.out.print("Tag name to remove: ");
+        String tagName = scanner.nextLine().trim();
 
         boolean ok = tagService.removeTag(ownerId, chosen.get().getId(), tagName);
         System.out.println(ok ? "Tag removed from contact." : "Remove failed.");
@@ -1122,15 +1111,8 @@ public class Main {
         if (current.isEmpty()) { System.out.println("Please login first."); return; }
         UUID ownerId = current.get().getId();
 
-        List<Tag> tags = tagService.listTags(ownerId);
-        if (tags.isEmpty()) {
-            System.out.println("No tags available.");
-            return;
-        }
-        printTags(tags);
-        String tagName = chooseTagNameFromInput(scanner, tags);
-        if (tagName == null) { System.out.println("Invalid tag selection."); return; }
-
+        System.out.print("Tag name to query: ");
+        String tagName = scanner.nextLine().trim();
         Set<UUID> ids = tagService.contactsWithTag(ownerId, tagName);
         if (ids.isEmpty()) {
             System.out.println("No contacts found with tag '" + tagName + "'.");
@@ -1154,36 +1136,10 @@ public class Main {
 
     // ===== Helpers =====
 
-    private static void printTags(List<Tag> tags) {
-        System.out.println("\n=== Tags ===");
-        for (int i = 0; i < tags.size(); i++) {
-            System.out.printf("%2d) %s%n", i + 1, tags.get(i).getDisplay());
-        }
-    }
-
-    private static String chooseTagNameFromInput(Scanner scanner, List<Tag> tags) {
-        System.out.print("Select tag (number or name): ");
-        String sel = scanner.nextLine().trim();
-        try {
-            int idx = Integer.parseInt(sel);
-            if (idx >= 1 && idx <= tags.size()) {
-                return tags.get(idx - 1).getDisplay();
-            }
-        } catch (NumberFormatException ignored) { }
-        for (Tag t : tags) {
-            if (t.getDisplay().equalsIgnoreCase(sel)) return t.getDisplay();
-        }
-        return null;
-    }
-
-    private static Integer askPositiveInt(Scanner scanner, String prompt) {
-        System.out.print(prompt);
-        String raw = scanner.nextLine().trim();
-        try {
-            int n = Integer.parseInt(raw);
-            return (n > 0) ? n : null;
-        } catch (NumberFormatException e) {
-            return null;
+    private static void printGroups(List<String> groups) {
+        System.out.println("\n=== Groups ===");
+        for (int i = 0; i < groups.size(); i++) {
+            System.out.printf("%2d) %s%n", i + 1, groups.get(i));
         }
     }
 
@@ -1200,13 +1156,6 @@ public class Main {
             if (g.equalsIgnoreCase(sel)) return g;
         }
         return null;
-    }
-
-    private static void printGroups(List<String> groups) {
-        System.out.println("\n=== Groups ===");
-        for (int i = 0; i < groups.size(); i++) {
-            System.out.printf("%2d) %s%n", i + 1, groups.get(i));
-        }
     }
 
     private static Optional<Contact> chooseContactFromInput(List<Contact> contacts, String sel) {
@@ -1337,6 +1286,17 @@ public class Main {
     private static String prompt(Scanner scanner, String message) {
         System.out.print(message);
         return scanner.nextLine();
+    }
+
+    private static Integer askPositiveInt(Scanner scanner, String prompt) {
+        System.out.print(prompt);
+        String raw = scanner.nextLine().trim();
+        try {
+            int n = Integer.parseInt(raw);
+            return (n > 0) ? n : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static int parseIndex(String s, int min, int max) {
