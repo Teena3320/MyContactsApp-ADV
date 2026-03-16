@@ -6,39 +6,35 @@ import util.ValidationException;
 
 import java.util.*;
 /**
- * Use Case 10: Advanced Filter & Sort
+ * Use Case 11: Create and Manage Tags
  *
  *   This module enables:
- *   - Applying multiple filters to a user's contacts (AND semantics)
- *   - Choosing a sort strategy (by name, created/updated timestamps, type → name)
- *   - Extending filter and sort behavior without modifying core logic
+ *   - Creating owner‑scoped tags with normalized names (case‑insensitive)
+ *   - Assigning and removing tags to/from contacts (many‑to‑many)
+ *   - Listing all tags and querying contacts by a given tag
  *   Optional enhancements:
- *   - OR / NOT filter combinators and filter groups
- *   - Multi-level sorting (primary, secondary, tertiary)
- *   - Pagination, stable sorting, and null-safe comparators
+ *   - Tag rename/merge operations and duplicate resolution
+ *   - Visual attributes (color/emoji) for UI emphasis
+ *   - Predefined tag sets (e.g., Enum‑backed starter categories)
  *
  *   Demonstrates:
- *   - Strategy Pattern for both filtering (FilterStrategy) and sorting (SortStrategy)
- *   - Open/Closed Principle: new filters/sorts can be added via new strategies
- *   - Separation of concerns: FilterSortService orchestrates repository → filter → sort
- *   - Reuse of existing rendering to preview filtered/sorted results
- *   - Time-based predicates (Created/Updated in last N days)
+ *   - Flyweight‑style reuse of Tag value objects per owner
+ *   - Many‑to‑many association management (Contact ↔ Tag)
+ *   - Robust normalization and equality semantics for value objects
+ *   - Clear separation of concerns: tag catalog vs. contact‑tag links
+ *   - Safe access patterns (immutable views of tag collections)
  *
  *   Components:
- *   - FilterSortService : orchestrates filtering and sorting for owner-scoped datasets
- *   - FilterStrategy<T> : boolean test for inclusion
- *   - SortStrategy<T>   : provides Comparator<T> for ordering
- *   - Filters           : built-in strategies (HasEmail, HasPhone, TypePerson, TypeOrganization,
- *                         CreatedLastNDays, UpdatedLastNDays, EmailDomainContains, NameContains)
- *   - SortStrategies    : enum strategies (NAME_ASC/DESC, CREATED_AT_ASC/DESC, UPDATED_AT_ASC/DESC, TYPE_THEN_NAME)
+ *   - Tag            : Value object (normalized name, display label)
+ *   - TagService     : Owner‑scoped registry + contact‑tag associations
+ *   - Integrations   : Works alongside ContactService and view rendering
  *
  *   Notes:
- *   - Filters are combined with AND semantics by default; extend with composite filters for OR/NOT.
- *   - Current implementation is in-memory; for large datasets, push filters/sorts to the data layer (DB/index).
- *   - Comparators are case-insensitive for name-based ordering and handle polymorphic types uniformly.
+ *   - All tag operations are scoped to the logged‑in owner (user).
+ *   - Normalization ensures "Work" and "work" refer to the same Tag.
  *
  * @author tseb3003
- * @version 10.0
+ * @version 11.0
  */
 public class Main {
 
@@ -70,7 +66,9 @@ public class Main {
 
         FilterSortService filterSortService = new FilterSortService(contactRepository);
 
-        System.out.println("=== MyContacts App - UC-10 ===");
+        TagService tagService = new TagService(contactRepository);
+
+        System.out.println("=== MyContacts App - UC-11 ===");
 
         try (Scanner scanner = new Scanner(System.in)) {
             boolean running = true;
@@ -86,9 +84,9 @@ public class Main {
                 System.out.println("8)  Create Contact (Person)");
                 System.out.println("9)  Create Contact (Organization)");
                 System.out.println("10) List My Contacts");
-                System.out.println("11) View Contact Details");
+                System.out.println("11) View Contact Details ");
                 System.out.println("12) Edit Contact ");
-                System.out.println("13) Undo last contact edit ");
+                System.out.println("13) Undo last contact edit");
                 System.out.println("14) Redo contact edit ");
                 System.out.println("15) Delete Contact ");
                 System.out.println("16) View Trash ");
@@ -96,15 +94,21 @@ public class Main {
                 System.out.println("18) Purge from Trash ");
                 System.out.println("19) Create Group ");
                 System.out.println("20) Add Contact to Group ");
-                System.out.println("21) Remove Contact from Group ");
+                System.out.println("21) Remove Contact from Group");
                 System.out.println("22) List Groups ");
-                System.out.println("23) Bulk Soft Delete Group");
+                System.out.println("23) Bulk Soft Delete Group ");
                 System.out.println("24) Bulk Export Group ");
                 System.out.println("25) Search Contacts ");
                 System.out.println("26) Advanced Filter & Sort ");
-                System.out.println("27) Who am I?");
-                System.out.println("28) Logout");
-                System.out.println("29) Exit");
+                System.out.println("27) Tag: Create ");
+                System.out.println("28) Tag: List All");
+                System.out.println("29) Tag: Assign to Contact");
+                System.out.println("30) Tag: Remove from Contact ");
+                System.out.println("31) Tag: Show Contact's Tags");
+                System.out.println("32) Tag: List Contacts by Tag ");
+                System.out.println("33) Who am I?");
+                System.out.println("34) Logout");
+                System.out.println("35) Exit");
                 System.out.print("Choose an option: ");
                 String choice = scanner.nextLine().trim();
 
@@ -119,7 +123,7 @@ public class Main {
                     case "8" -> handleCreatePerson(scanner, authService, contactService);
                     case "9" -> handleCreateOrganization(scanner, authService, contactService);
                     case "10" -> handleListContacts(authService, contactService);
-                    case "11" -> handleViewContactDetails(scanner, authService, contactService, renderer);
+                    case "11" -> handleViewContactDetails(scanner, authService, contactService, renderer, tagService);
                     case "12" -> handleEditContact(scanner, authService, contactService, editService, contactHistory);
                     case "13" -> System.out.println(contactHistory.undo());
                     case "14" -> System.out.println(contactHistory.redo());
@@ -135,9 +139,15 @@ public class Main {
                     case "24" -> handleBulkExportGroup(scanner, authService, groupService, contactRepository, renderer);
                     case "25" -> handleSearchContacts(scanner, authService, searchService, renderer);
                     case "26" -> handleAdvancedFilterSort(scanner, authService, filterSortService, renderer);
-                    case "27" -> handleWhoAmI(authService);
-                    case "28" -> handleLogout(authService);
-                    case "29" -> {
+                    case "27" -> handleCreateTag(scanner, authService, tagService);
+                    case "28" -> handleListTags(scanner, authService, tagService);
+                    case "29" -> handleAssignTagToContact(scanner, authService, contactService, tagService);
+                    case "30" -> handleRemoveTagFromContact(scanner, authService, contactService, tagService);
+                    case "31" -> handleShowContactTags(scanner, authService, contactService, tagService);
+                    case "32" -> handleListContactsByTag(scanner, authService, contactService, tagService);
+                    case "33" -> handleWhoAmI(authService);
+                    case "34" -> handleLogout(authService);
+                    case "35" -> {
                         running = false;
                         System.out.println("Goodbye!");
                     }
@@ -341,7 +351,8 @@ public class Main {
     private static void handleViewContactDetails(Scanner scanner,
                                                  AuthService authService,
                                                  ContactService contactService,
-                                                 ContactRenderer renderer) {
+                                                 ContactRenderer renderer,
+                                                 TagService tagService) {
         Optional<User> current = authService.currentUser();
         if (current.isEmpty()) {
             System.out.println("Please login first.");
@@ -379,6 +390,22 @@ public class Main {
 
         String rendered = renderer.render(chosen.get(), options);
         System.out.println(rendered);
+
+        // Show tags (UC-11)
+        Set<Tag> tags = tagService.tagsForContact(userId, chosen.get().getId());
+        if (tags.isEmpty()) {
+            System.out.println("Tags     : (none)");
+        } else {
+            System.out.print("Tags     : ");
+            boolean first = true;
+            for (Tag t : tags) {
+                if (!first) System.out.print(", ");
+                System.out.print(t.getDisplay());
+                first = false;
+            }
+            System.out.println();
+        }
+        System.out.println("========================================");
     }
 
     // ===== UC-06 =====
@@ -951,7 +978,203 @@ public class Main {
         }
     }
 
+    // ===== UC-11 =====
+
+    private static void handleCreateTag(Scanner scanner,
+                                        AuthService authService,
+                                        TagService tagService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+
+        System.out.print("New tag name: ");
+        String name = scanner.nextLine().trim();
+        boolean ok = tagService.createTag(current.get().getId(), name);
+        System.out.println(ok ? "Tag created." : "Tag already exists or invalid.");
+    }
+
+    private static void handleListTags(Scanner scanner,
+                                       AuthService authService,
+                                       TagService tagService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+
+        List<Tag> tags = tagService.listTags(current.get().getId());
+        if (tags.isEmpty()) {
+            System.out.println("No tags found.");
+            return;
+        }
+        System.out.println("\n=== Tags ===");
+        for (int i = 0; i < tags.size(); i++) {
+            System.out.printf("%2d) %s%n", i + 1, tags.get(i).getDisplay());
+        }
+    }
+
+    private static void handleAssignTagToContact(Scanner scanner,
+                                                 AuthService authService,
+                                                 ContactService contactService,
+                                                 TagService tagService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<Contact> contacts = contactService.listMyContacts(ownerId);
+        if (contacts.isEmpty()) { System.out.println("You have no contacts."); return; }
+        System.out.println("\n=== Select Contact ===");
+        for (int i = 0; i < contacts.size(); i++) {
+            Contact c = contacts.get(i);
+            System.out.printf("%2d) %s (%s) [id=%s]%n", i + 1, ConsoleContactRenderer.bestEffortName(c),
+                    c.getClass().getSimpleName(), c.getId());
+        }
+        System.out.print("Enter number or paste Contact ID: ");
+        String sel = scanner.nextLine().trim();
+        Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
+        if (chosen.isEmpty()) { System.out.println("Invalid selection."); return; }
+
+        List<Tag> tags = tagService.listTags(ownerId);
+        if (tags.isEmpty()) {
+            System.out.println("No tags available. Create one first.");
+            return;
+        }
+        printTags(tags);
+        String tagName = chooseTagNameFromInput(scanner, tags);
+        if (tagName == null) { System.out.println("Invalid tag selection."); return; }
+
+        boolean ok = tagService.assignTag(ownerId, chosen.get().getId(), tagName);
+        System.out.println(ok ? "Tag assigned to contact." : "Assign failed.");
+    }
+
+    private static void handleRemoveTagFromContact(Scanner scanner,
+                                                   AuthService authService,
+                                                   ContactService contactService,
+                                                   TagService tagService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<Contact> contacts = contactService.listMyContacts(ownerId);
+        if (contacts.isEmpty()) { System.out.println("You have no contacts."); return; }
+        System.out.println("\n=== Select Contact ===");
+        for (int i = 0; i < contacts.size(); i++) {
+            Contact c = contacts.get(i);
+            System.out.printf("%2d) %s (%s) [id=%s]%n", i + 1, ConsoleContactRenderer.bestEffortName(c),
+                    c.getClass().getSimpleName(), c.getId());
+        }
+        System.out.print("Enter number or paste Contact ID: ");
+        String sel = scanner.nextLine().trim();
+        Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
+        if (chosen.isEmpty()) { System.out.println("Invalid selection."); return; }
+
+        Set<Tag> tags = tagService.tagsForContact(ownerId, chosen.get().getId());
+        if (tags.isEmpty()) {
+            System.out.println("This contact has no tags.");
+            return;
+        }
+        List<Tag> asList = new ArrayList<>(tags);
+        printTags(asList);
+        String tagName = chooseTagNameFromInput(scanner, asList);
+        if (tagName == null) { System.out.println("Invalid tag selection."); return; }
+
+        boolean ok = tagService.removeTag(ownerId, chosen.get().getId(), tagName);
+        System.out.println(ok ? "Tag removed from contact." : "Remove failed.");
+    }
+
+    private static void handleShowContactTags(Scanner scanner,
+                                              AuthService authService,
+                                              ContactService contactService,
+                                              TagService tagService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<Contact> contacts = contactService.listMyContacts(ownerId);
+        if (contacts.isEmpty()) { System.out.println("You have no contacts."); return; }
+        System.out.println("\n=== Select Contact ===");
+        for (int i = 0; i < contacts.size(); i++) {
+            Contact c = contacts.get(i);
+            System.out.printf("%2d) %s (%s) [id=%s]%n", i + 1, ConsoleContactRenderer.bestEffortName(c),
+                    c.getClass().getSimpleName(), c.getId());
+        }
+        System.out.print("Enter number or paste Contact ID: ");
+        String sel = scanner.nextLine().trim();
+        Optional<Contact> chosen = chooseContactFromInput(contacts, sel);
+        if (chosen.isEmpty()) { System.out.println("Invalid selection."); return; }
+
+        Set<Tag> tags = tagService.tagsForContact(ownerId, chosen.get().getId());
+        if (tags.isEmpty()) {
+            System.out.println("Tags: (none)");
+        } else {
+            System.out.print("Tags: ");
+            boolean first = true;
+            for (Tag t : tags) {
+                if (!first) System.out.print(", ");
+                System.out.print(t.getDisplay());
+                first = false;
+            }
+            System.out.println();
+        }
+    }
+
+    private static void handleListContactsByTag(Scanner scanner,
+                                                AuthService authService,
+                                                ContactService contactService,
+                                                TagService tagService) {
+        Optional<User> current = authService.currentUser();
+        if (current.isEmpty()) { System.out.println("Please login first."); return; }
+        UUID ownerId = current.get().getId();
+
+        List<Tag> tags = tagService.listTags(ownerId);
+        if (tags.isEmpty()) {
+            System.out.println("No tags available.");
+            return;
+        }
+        printTags(tags);
+        String tagName = chooseTagNameFromInput(scanner, tags);
+        if (tagName == null) { System.out.println("Invalid tag selection."); return; }
+
+        Set<UUID> ids = tagService.contactsWithTag(ownerId, tagName);
+        if (ids.isEmpty()) {
+            System.out.println("No contacts found with tag '" + tagName + "'.");
+            return;
+        }
+        List<Contact> contacts = contactService.listMyContacts(ownerId);
+        System.out.println("\n=== Contacts with tag '" + tagName + "' ===");
+        int idx = 1;
+        for (Contact c : contacts) {
+            if (ids.contains(c.getId())) {
+                System.out.printf("%2d) %s (%s) [id=%s]%n", idx++,
+                        ConsoleContactRenderer.bestEffortName(c),
+                        c.getClass().getSimpleName(),
+                        c.getId());
+            }
+        }
+        if (idx == 1) {
+            System.out.println("(none)");
+        }
+    }
+
     // ===== Helpers =====
+
+    private static void printTags(List<Tag> tags) {
+        System.out.println("\n=== Tags ===");
+        for (int i = 0; i < tags.size(); i++) {
+            System.out.printf("%2d) %s%n", i + 1, tags.get(i).getDisplay());
+        }
+    }
+
+    private static String chooseTagNameFromInput(Scanner scanner, List<Tag> tags) {
+        System.out.print("Select tag (number or name): ");
+        String sel = scanner.nextLine().trim();
+        try {
+            int idx = Integer.parseInt(sel);
+            if (idx >= 1 && idx <= tags.size()) {
+                return tags.get(idx - 1).getDisplay();
+            }
+        } catch (NumberFormatException ignored) { }
+        for (Tag t : tags) {
+            if (t.getDisplay().equalsIgnoreCase(sel)) return t.getDisplay();
+        }
+        return null;
+    }
 
     private static Integer askPositiveInt(Scanner scanner, String prompt) {
         System.out.print(prompt);
